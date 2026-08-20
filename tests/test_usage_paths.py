@@ -58,6 +58,32 @@ def test_device_uses_matching_esphome_node_and_friendly_names():
     asyncio.run(run())
 
 
+def test_device_omits_non_dotted_project_name_for_home_assistant_compatibility():
+    async def run() -> None:
+        device = Device(
+            name="Project Compatibility",
+            mac_address="02:00:00:00:00:18",
+            project_name="aioesphomeserver",
+            project_version="1.0.0",
+        )
+        info = await device.build_device_info_response()
+        assert info.project_name == ""
+        assert info.project_version == ""
+
+        zeroconf = AsyncMock()
+        with (
+            patch("aioesphomeserver.device.AsyncZeroconf", return_value=zeroconf),
+            patch.object(device, "_get_ip_address", return_value="192.0.2.18"),
+        ):
+            await device.register_zeroconf(6053)
+
+        service = zeroconf.async_register_service.await_args.args[0]
+        assert b"project_name" not in service.properties
+        assert b"project_version" not in service.properties
+
+    asyncio.run(run())
+
+
 def test_zeroconf_uses_api_node_name_and_standard_txt_records():
     async def run() -> None:
         device = Device(

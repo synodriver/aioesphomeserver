@@ -136,15 +136,21 @@ class Device:
     def get_ip_address(self) -> str:
         return self._get_ip_address()
 
+    def _project_info(self) -> tuple[str, str]:
+        if not self.project_name or "." not in self.project_name:
+            return "", ""
+        return self.project_name, self.project_version or "0.0.1"
+
     async def build_device_info_response(self) -> DeviceInfoResponse:
+        project_name, project_version = self._project_info()
         response = DeviceInfoResponse(
             uses_password=False,
             name=self.name,
             mac_address=self.mac_address,
             esphome_version="0.0.1",
             model=self.model or "Python",
-            project_name=self.project_name or "aioesphomeserver",
-            project_version=self.project_version or "0.0.1",
+            project_name=project_name,
+            project_version=project_version,
             webserver_port=self.web_port or 0,
             manufacturer=self.manufacturer,
             friendly_name=self.friendly_name or self.name,
@@ -285,6 +291,7 @@ class Device:
             config_hash = hashlib.sha256(
                 f"{self.name}:{self.project_name}:{self.project_version}".encode()
             ).hexdigest()[:8]
+            project_name, project_version = self._project_info()
 
             properties = {
                 "network": self.network or "wifi",
@@ -294,9 +301,10 @@ class Device:
                 "version": "0.0.1",
                 "config_hash": config_hash,
                 "friendly_name": self.friendly_name or self.name,
-                "project_name": self.project_name or "aioesphomeserver",
-                "project_version": self.project_version or "0.0.1",
             }
+            if project_name:
+                properties["project_name"] = project_name
+                properties["project_version"] = project_version
             if self.encryption_key is not None:
                 properties["api_encryption"] = (
                     "Noise_NNpsk0_25519_ChaChaPoly_SHA256"

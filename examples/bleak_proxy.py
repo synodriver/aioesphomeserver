@@ -317,6 +317,7 @@ def _print_startup_diagnostics(
     print(f"Using aioesphomeserver from: {aioesphomeserver.__file__}")
     print(f"Starting {device.name} on API port {api_port}, web port {web_port or 'disabled'}")
     print(f"Device MAC: {device.mac_address}")
+    print(f"Project: {device.project_name or '<none>'} {device.project_version or ''}".rstrip())
     print(f"Bluetooth MAC: {bluetooth_mac_address}")
     print(f"Bluetooth feature flags: {feature_flags} ({_feature_names(feature_flags)})")
     print(f"Exposed entities: {entities or 'none'}")
