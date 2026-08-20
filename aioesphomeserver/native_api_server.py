@@ -5,26 +5,24 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from aioesphomeapi.api_pb2 import (
-    AuthenticationRequest,# type: ignore
-    AuthenticationResponse,# type: ignore
-    DeviceInfoRequest,# type: ignore
-    DisconnectRequest,# type: ignore
-    DisconnectResponse,# type: ignore
-    GetTimeRequest,# type: ignore
-    GetTimeResponse,# type: ignore
-    HelloRequest,# type: ignore
-    HelloResponse,# type: ignore
-    ListEntitiesDoneResponse,# type: ignore
-    ListEntitiesRequest,# type: ignore
-    PingRequest,# type: ignore
-    PingResponse,# type: ignore
-    SubscribeHomeAssistantStatesRequest,# type: ignore
-    SubscribeHomeassistantServicesRequest,# type: ignore
-    SubscribeLogsRequest, # type: ignore
-    SubscribeLogsResponse, # type: ignore
-    SubscribeStatesRequest, # type: ignore
-)
+from aioesphomeapi.api_pb2 import AuthenticationRequest  # type: ignore
+from aioesphomeapi.api_pb2 import AuthenticationResponse  # type: ignore
+from aioesphomeapi.api_pb2 import DeviceInfoRequest  # type: ignore
+from aioesphomeapi.api_pb2 import DisconnectRequest  # type: ignore
+from aioesphomeapi.api_pb2 import DisconnectResponse  # type: ignore
+from aioesphomeapi.api_pb2 import GetTimeRequest  # type: ignore
+from aioesphomeapi.api_pb2 import GetTimeResponse  # type: ignore
+from aioesphomeapi.api_pb2 import HelloRequest  # type: ignore
+from aioesphomeapi.api_pb2 import HelloResponse  # type: ignore
+from aioesphomeapi.api_pb2 import ListEntitiesDoneResponse  # type: ignore
+from aioesphomeapi.api_pb2 import ListEntitiesRequest  # type: ignore
+from aioesphomeapi.api_pb2 import PingRequest  # type: ignore
+from aioesphomeapi.api_pb2 import PingResponse  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeHomeassistantServicesRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeHomeAssistantStatesRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeLogsRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeLogsResponse  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeStatesRequest  # type: ignore
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from noise.connection import NoiseConnection
 from noise.exceptions import NoiseInvalidMessage
@@ -34,6 +32,7 @@ from .device_capabilities import DeviceCapabilitiesRequest
 
 if TYPE_CHECKING:
     from asyncio import StreamReader, StreamWriter
+
     from google.protobuf.message import Message
 
 
@@ -44,7 +43,9 @@ MAX_NOISE_FRAME_SIZE = 65535
 NOISE_HANDSHAKE_TIMEOUT = 10
 NOISE_PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
 NOISE_PROLOGUE = b"NoiseAPIInit"
-PROTO_TO_MESSAGE_TYPE = {proto: type_id for type_id, proto in MESSAGE_TYPE_TO_PROTO.items()}
+PROTO_TO_MESSAGE_TYPE = {
+    proto: type_id for type_id, proto in MESSAGE_TYPE_TO_PROTO.items()
+}
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,9 @@ class NativeApiConnection:
 
         message_type = PROTO_TO_MESSAGE_TYPE.get(type(message))
         if message_type is None:
-            raise ValueError(f"unknown native API protobuf type: {type(message).__name__}")
+            raise ValueError(
+                f"unknown native API protobuf type: {type(message).__name__}"
+            )
 
         payload = message.SerializeToString()
         if self._noise is None:
@@ -215,9 +218,7 @@ class NativeApiConnection:
                 b"\x01",
                 self.server.device.name.encode("utf-8"),
                 b"\0",
-                self.server.device.mac_address.replace(":", "").lower().encode(
-                    "ascii"
-                ),
+                self.server.device.mac_address.replace(":", "").lower().encode("ascii"),
                 b"\0",
             )
         )
@@ -268,9 +269,7 @@ class NativeApiConnection:
         header = await self.reader.readexactly(3)
         if header[0] != 1:
             await self._write_noise_rejection("Bad indicator byte")
-            raise NativeApiProtocolError(
-                f"unsupported Noise indicator: {header[0]}"
-            )
+            raise NativeApiProtocolError(f"unsupported Noise indicator: {header[0]}")
         length = int.from_bytes(header[1:3], "big")
         if length > MAX_NOISE_FRAME_SIZE:
             raise NativeApiProtocolError(f"Noise frame is too large: {length} bytes")
@@ -325,7 +324,9 @@ class NativeApiServer(BasicEntity):
         self._started = asyncio.Event()
 
     async def run(self) -> None:
-        self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
+        self.server = await asyncio.start_server(
+            self.handle_client, self.host, self.port
+        )
         sockets = self.server.sockets or []
         self.bound_port = sockets[0].getsockname()[1] if sockets else self.port
         self._started.set()
@@ -342,7 +343,9 @@ class NativeApiServer(BasicEntity):
             if client.subscribe_to_logs:
                 await client.log(3, message)
 
-    async def handle_client(self, reader: "StreamReader", writer: "StreamWriter") -> None:
+    async def handle_client(
+        self, reader: "StreamReader", writer: "StreamWriter"
+    ) -> None:
         connection = NativeApiConnection(self, reader, writer)
         self._clients.add(connection)
         try:

@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
+from aioesphomeapi.api_pb2 import (
     SubscribeVoiceAssistantRequest,
     VoiceAssistantAnnounceFinished,
     VoiceAssistantAnnounceRequest,
@@ -18,8 +18,10 @@ from aioesphomeapi.api_pb2 import (  # type: ignore
     VoiceAssistantResponse,
     VoiceAssistantSetConfiguration,
     VoiceAssistantTimerEventResponse,
-    VoiceAssistantWakeWord as VoiceAssistantWakeWordProto,
 )
+from aioesphomeapi.api_pb2 import (
+    VoiceAssistantWakeWord as VoiceAssistantWakeWordProto,
+)  # type: ignore
 from aioesphomeapi.model import (
     VoiceAssistantCommandFlag,
     VoiceAssistantEventType,
@@ -29,6 +31,7 @@ from aioesphomeapi.model import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
     from google.protobuf.message import Message
 
     from .native_api_server import NativeApiConnection
@@ -133,7 +136,9 @@ class VoiceAssistant:
         if max_active_wake_words < 0:
             raise ValueError("max_active_wake_words must be non-negative")
         if output_only and multi_channel_audio:
-            raise ValueError("output-only voice assistants cannot use microphone channels")
+            raise ValueError(
+                "output-only voice assistants cannot use microphone channels"
+            )
 
         features = VoiceAssistantFeature.API_AUDIO
         if not output_only:
@@ -213,7 +218,9 @@ class VoiceAssistant:
         if self._pipeline_active:
             raise VoiceAssistantError("an Assist pipeline is already active")
         if self._start_future is not None and not self._start_future.done():
-            raise VoiceAssistantError("a voice assistant start request is already pending")
+            raise VoiceAssistantError(
+                "a voice assistant start request is already pending"
+            )
 
         flags = VoiceAssistantCommandFlag(0)
         if use_vad:
@@ -397,7 +404,9 @@ class VoiceAssistant:
         self._stream_port = None
         self._pipeline_active = False
         self._subscribed_event.clear()
-        self._fail_pending_start(VoiceAssistantNotSubscribedError("API client disconnected"))
+        self._fail_pending_start(
+            VoiceAssistantNotSubscribedError("API client disconnected")
+        )
         self._cancel_announcement_tasks()
         await self.on_client_subscription(False, 0)
 
@@ -430,7 +439,9 @@ class VoiceAssistant:
         if future is None or future.done():
             return
         if message.error:
-            future.set_exception(VoiceAssistantStartError("Assist pipeline failed to start"))
+            future.set_exception(
+                VoiceAssistantStartError("Assist pipeline failed to start")
+            )
         else:
             future.set_result(message.port)
 

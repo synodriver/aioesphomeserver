@@ -3,26 +3,27 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
-    ListEntitiesNumberResponse,
+from aioesphomeapi.api_pb2 import (
+    ListEntitiesNumberResponse,  # type: ignore
     NumberCommandRequest,
     NumberStateResponse,
 )
 
 from .basic_entity import BasicEntity
 
+
 class NumberEntity(BasicEntity):
     DOMAIN = "number"
 
     def __init__(
-            self,
-            *args: Any,
-            min_value: float | None = None,
-            max_value: float | None = None,
-            step: float | None = None,
-            unit_of_measurement: str | None = None,
-            mode: int | None = None,
-            **kwargs: Any
+        self,
+        *args: Any,
+        min_value: float | None = None,
+        max_value: float | None = None,
+        step: float | None = None,
+        unit_of_measurement: str | None = None,
+        mode: int | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.min_value = min_value
@@ -48,10 +49,7 @@ class NumberEntity(BasicEntity):
         )
 
     async def build_state_response(self) -> NumberStateResponse:
-        return NumberStateResponse(
-            key=self.key,
-            state=await self.get_state()
-        )
+        return NumberStateResponse(key=self.key, state=await self.get_state())
 
     async def state_json(self) -> str:
         state = await self.get_state()
@@ -69,7 +67,9 @@ class NumberEntity(BasicEntity):
     async def set_state(self, val: float) -> None:
         if self.device is None:
             raise RuntimeError("entity is not attached to a device")
-        await self.device.log(3, self.DOMAIN, f"[{self.object_id}] Setting value to {val}")
+        await self.device.log(
+            3, self.DOMAIN, f"[{self.object_id}] Setting value to {val}"
+        )
         old_state = self._state
         self._state = val
         if val != old_state:
@@ -82,6 +82,7 @@ class NumberEntity(BasicEntity):
     async def handle(self, key: str, message: object) -> None:
         if type(message) is NumberCommandRequest and message.key == self.key:
             await self.on_command(message.state)
+
 
 # Example usage
 if __name__ == "__main__":

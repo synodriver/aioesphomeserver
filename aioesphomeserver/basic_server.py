@@ -1,16 +1,17 @@
 import asyncio
 from typing import Any
 
+from aioesphomeapi import LightColorCapability
+
 from .binary_sensor import BinarySensorEntity
 from .device import Device
+from .light import LightEntity
 from .listener import EntityListener
 from .native_api_server import NativeApiServer
+from .sensor import SensorEntity
 from .switch import SwitchEntity
 from .web_server import WebServer
-from .light import LightEntity
-from .sensor import SensorEntity
 
-from aioesphomeapi import LightColorCapability
 
 class SwitchListener(EntityListener):
     async def handle(self, key: str, message: Any) -> None:
@@ -20,45 +21,42 @@ class SwitchListener(EntityListener):
         if isinstance(sensor, BinarySensorEntity):
             await sensor.set_state(message.state)
 
+
 if __name__ == "__main__":
     device = Device(
-        name = "Test Device",
-        mac_address = "AC:BC:32:89:0E:C9",
-        model = "Test Device",
-        project_name = "aioesphomeserver",
-        project_version = "1.0.0",
+        name="Test Device",
+        mac_address="AC:BC:32:89:0E:C9",
+        model="Test Device",
+        project_name="aioesphomeserver.basic-server",
+        project_version="1.0.0",
     )
 
     device.add_entity(
         BinarySensorEntity(
-            name = "Test Binary Sensor",
+            name="Test Binary Sensor",
         )
     )
 
     device.add_entity(
         SwitchEntity(
-            name = "Test Switch",
+            name="Test Switch",
         )
     )
 
-    device.add_entity(
-        SensorEntity(
-            name = "Test Sensor"
-        )
-    )
+    device.add_entity(SensorEntity(name="Test Sensor"))
 
-    device.add_entity(
-        SwitchListener(
-            name="_listener",
-            entity_id="test_switch"
-        )
-    )
+    device.add_entity(SwitchListener(name="_listener", entity_id="test_switch"))
 
     device.add_entity(
         LightEntity(
-            name = "Text Light",
-            effects = ["Foo", "Bar", "Sparkle"],
-            color_modes = [LightColorCapability.ON_OFF | LightColorCapability.BRIGHTNESS | LightColorCapability.RGB | LightColorCapability.WHITE],
+            name="Text Light",
+            effects=["Foo", "Bar", "Sparkle"],
+            color_modes=[
+                LightColorCapability.ON_OFF
+                | LightColorCapability.BRIGHTNESS
+                | LightColorCapability.RGB
+                | LightColorCapability.WHITE
+            ],
         )
     )
 

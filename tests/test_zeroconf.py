@@ -1,4 +1,5 @@
-from zeroconf import ServiceBrowser, Zeroconf, ServiceInfo
+from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf
+
 
 class MyListener:
     def add_service(self, zeroconf, service_type, name):
@@ -15,7 +16,9 @@ class MyListener:
             self.log_service_info("updated", name, info)
 
     def log_service_info(self, action, name, info):
-        addresses = ["%s:%d" % (address, info.port) for address in info.parsed_addresses()]
+        addresses = [
+            "%s:%d" % (address, info.port) for address in info.parsed_addresses()
+        ]
         properties = info.properties
         print(f"Service {name} {action}:")
         print(f"  Addresses: {addresses}")
@@ -24,6 +27,7 @@ class MyListener:
         for key, value in properties.items():
             if value is not None:
                 print(f"    {key.decode('utf-8')}: {value.decode('utf-8')}")
+
 
 if __name__ == "__main__":
     zeroconf = Zeroconf()

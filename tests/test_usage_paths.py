@@ -1,7 +1,8 @@
+import ast
 import asyncio
 import json
-from unittest.mock import AsyncMock
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from aioesphomeapi import APIClient, LightColorCapability
@@ -82,6 +83,27 @@ def test_device_omits_non_dotted_project_name_for_home_assistant_compatibility()
         assert b"project_version" not in service.properties
 
     asyncio.run(run())
+
+
+def test_runnable_examples_use_home_assistant_compatible_project_names():
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        *sorted((root / "examples").glob("*.py")),
+        root / "aioesphomeserver" / "basic_server.py",
+    ]
+    invalid: list[str] = []
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.keyword) or node.arg != "project_name":
+                continue
+            if isinstance(node.value, ast.Constant) and isinstance(
+                node.value.value, str
+            ):
+                if "." not in node.value.value:
+                    invalid.append(f"{path.relative_to(root)}:{node.value.value}")
+
+    assert invalid == []
 
 
 def test_zeroconf_uses_api_node_name_and_standard_txt_records():
@@ -224,7 +246,11 @@ def test_light_http_style_commands_update_state_json():
         assert state["state"] == "ON"
         assert state["brightness"] == 128
         assert state["white_value"] == pytest.approx(64 / 255)
-        assert state["color"] == {"r": 1.0, "g": pytest.approx(64 / 255), "b": pytest.approx(32 / 255)}
+        assert state["color"] == {
+            "r": 1.0,
+            "g": pytest.approx(64 / 255),
+            "b": pytest.approx(32 / 255),
+        }
         light.notify_state_change.assert_awaited_once()
 
         response = await light.route_turn_off(
@@ -240,7 +266,10 @@ def test_climate_http_style_command_and_state_json():
     async def run() -> None:
         climate = ClimateEntity(
             name="Thermostat",
-            supported_modes=(ClimateMode.CLIMATE_MODE_OFF, ClimateMode.CLIMATE_MODE_HEAT),
+            supported_modes=(
+                ClimateMode.CLIMATE_MODE_OFF,
+                ClimateMode.CLIMATE_MODE_HEAT,
+            ),
             supports_current_temperature=True,
         )
         device = Device(name="Climate device", mac_address="02:00:00:00:00:12")

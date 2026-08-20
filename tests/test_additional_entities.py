@@ -31,6 +31,7 @@ from aioesphomeserver import (
     AlarmControlPanelEntity,
     ButtonEntity,
     CameraEntity,
+    ClimateEntity,
     CoverEntity,
     DateEntity,
     DateTimeEntity,
@@ -38,24 +39,21 @@ from aioesphomeserver import (
     EventEntity,
     FanEntity,
     InfraredEntity,
+    LightEntity,
     LockEntity,
     MediaPlayerEntity,
     NativeApiServer,
+    NumberEntity,
     RadioFrequencyEntity,
+    SelectEntity,
     SirenEntity,
+    SwitchEntity,
     TextEntity,
     TextSensorEntity,
     TimeEntity,
     UpdateEntity,
     ValveEntity,
     WaterHeaterEntity,
-)
-from aioesphomeserver import (
-    ClimateEntity,
-    LightEntity,
-    NumberEntity,
-    SelectEntity,
-    SwitchEntity,
 )
 
 
@@ -196,10 +194,25 @@ async def _test_all_missing_entity_types_are_discoverable():
         _info, discovered, _services = await client.device_info_and_list_entities()
         info_types = {type(info) for info in discovered}
         assert {
-            ButtonInfo, TextSensorInfo, TextInfo, CoverInfo, FanInfo, LockInfo,
-            MediaPlayerInfo, SirenInfo, ValveInfo, WaterHeaterInfo,
-            AlarmControlPanelInfo, DateInfo, DateTimeInfo, TimeInfo, UpdateInfo,
-            EventInfo, CameraInfo, InfraredInfo, RadioFrequencyInfo,
+            ButtonInfo,
+            TextSensorInfo,
+            TextInfo,
+            CoverInfo,
+            FanInfo,
+            LockInfo,
+            MediaPlayerInfo,
+            SirenInfo,
+            ValveInfo,
+            WaterHeaterInfo,
+            AlarmControlPanelInfo,
+            DateInfo,
+            DateTimeInfo,
+            TimeInfo,
+            UpdateInfo,
+            EventInfo,
+            CameraInfo,
+            InfraredInfo,
+            RadioFrequencyInfo,
         } <= info_types
     finally:
         if client is not None:
@@ -232,7 +245,9 @@ async def _test_event_and_text_hooks_publish_state():
         client.subscribe_states(states.append)
         await text_sensor.set_state("ready")
         await event.trigger("ready")
-        await _wait_for(lambda: any(getattr(state, "state", None) == "ready" for state in states))
+        await _wait_for(
+            lambda: any(getattr(state, "state", None) == "ready" for state in states)
+        )
     finally:
         if client is not None:
             await client.disconnect()

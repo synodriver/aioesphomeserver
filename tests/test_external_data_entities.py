@@ -2,7 +2,13 @@ import asyncio
 
 import pytest
 from aioesphomeapi import APIClient
-from aioesphomeapi.model import NumberInfo, NumberState, SelectInfo, SelectState, SensorState
+from aioesphomeapi.model import (
+    NumberInfo,
+    NumberState,
+    SelectInfo,
+    SelectState,
+    SensorState,
+)
 
 from aioesphomeserver import (
     Device,
@@ -70,8 +76,12 @@ async def _test_sensor_number_and_select_with_official_client():
         await client.connect(login=True)
         _info, entities, _services = await client.device_info_and_list_entities()
 
-        number_info = next(entity for entity in entities if isinstance(entity, NumberInfo))
-        select_info = next(entity for entity in entities if isinstance(entity, SelectInfo))
+        number_info = next(
+            entity for entity in entities if isinstance(entity, NumberInfo)
+        )
+        select_info = next(
+            entity for entity in entities if isinstance(entity, SelectInfo)
+        )
         assert select_info.options == ["auto", "eco"]
 
         states = []

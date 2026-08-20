@@ -3,36 +3,34 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
-    BinarySensorStateResponse,
+from aioesphomeapi.api_pb2 import (
+    BinarySensorStateResponse,  # type: ignore
     ListEntitiesBinarySensorResponse,
 )
 
 from .basic_entity import BasicEntity
 
+
 class BinarySensorEntity(BasicEntity):
     DOMAIN = "binary_sensor"
-    
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._state = False
 
     async def build_list_entities_response(self) -> ListEntitiesBinarySensorResponse:
         return ListEntitiesBinarySensorResponse(
-            object_id = self.object_id,
-            name = self.name,
-            key = self.key,
-            device_class = self.device_class,
-            icon = self.icon,
-            disabled_by_default = self.disabled_by_default,
-            entity_category = self.entity_category,
+            object_id=self.object_id,
+            name=self.name,
+            key=self.key,
+            device_class=self.device_class,
+            icon=self.icon,
+            disabled_by_default=self.disabled_by_default,
+            entity_category=self.entity_category,
         )
 
     async def build_state_response(self) -> BinarySensorStateResponse:
-        return BinarySensorStateResponse(
-            key = self.key,
-            state = await self.get_state()
-        )
+        return BinarySensorStateResponse(key=self.key, state=await self.get_state())
 
     async def state_json(self) -> str:
         state = await self.get_state()

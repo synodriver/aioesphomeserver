@@ -11,18 +11,19 @@ if TYPE_CHECKING:
 
     from .device import Device
 
+
 class BasicEntity:
     DOMAIN = ""
 
     def __init__(
-            self,
-            name: str,
-            object_id: str | None = None,
-            unique_id: str | None = None,
-            icon: str | None = None,
-            device_class: str | None = None,
-            entity_category: int | None = None,
-            disabled_by_default: bool = False,
+        self,
+        name: str,
+        object_id: str | None = None,
+        unique_id: str | None = None,
+        icon: str | None = None,
+        device_class: str | None = None,
+        entity_category: int | None = None,
+        disabled_by_default: bool = False,
     ) -> None:
         self.name = name
         self._assigned_object_id = object_id
@@ -96,7 +97,5 @@ class BasicEntity:
         if self.device is None:
             raise RuntimeError("entity is not attached to a device")
         await self.device.publish(
-            self,
-            'state_change',
-            await self.build_state_response()
+            self, "state_change", await self.build_state_response()
         )

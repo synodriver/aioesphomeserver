@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from aioesphomeapi import api_pb2
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 
-
 DEVICE_CAPABILITIES_REQUEST_TYPE = 149
 DEVICE_CAPABILITIES_RESPONSE_TYPE = 150
 

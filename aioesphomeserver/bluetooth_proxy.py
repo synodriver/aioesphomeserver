@@ -8,15 +8,21 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
+from aioesphomeapi.api_pb2 import (
     BluetoothConnectionsFreeResponse,
     BluetoothDeviceClearCacheResponse,
     BluetoothDeviceConnectionResponse,
     BluetoothDevicePairingResponse,
     BluetoothDeviceRequest,
     BluetoothDeviceUnpairingResponse,
+)
+from aioesphomeapi.api_pb2 import (
     BluetoothGATTCharacteristic as BluetoothGATTCharacteristicProto,
+)  # type: ignore
+from aioesphomeapi.api_pb2 import (
     BluetoothGATTDescriptor as BluetoothGATTDescriptorProto,
+)
+from aioesphomeapi.api_pb2 import (
     BluetoothGATTErrorResponse,
     BluetoothGATTGetServicesDoneResponse,
     BluetoothGATTGetServicesRequest,
@@ -27,7 +33,9 @@ from aioesphomeapi.api_pb2 import (  # type: ignore
     BluetoothGATTReadDescriptorRequest,
     BluetoothGATTReadRequest,
     BluetoothGATTReadResponse,
-    BluetoothGATTService as BluetoothGATTServiceProto,
+)
+from aioesphomeapi.api_pb2 import BluetoothGATTService as BluetoothGATTServiceProto
+from aioesphomeapi.api_pb2 import (
     BluetoothGATTWriteDescriptorRequest,
     BluetoothGATTWriteRequest,
     BluetoothGATTWriteResponse,
@@ -159,17 +167,13 @@ class BluetoothProxy:
     def _set_actual_scan_mode(self, active: bool) -> None:
         """Record a backend fallback so scanner state reports the real mode."""
         self._scan_mode = (
-            BluetoothScannerMode.ACTIVE
-            if active
-            else BluetoothScannerMode.PASSIVE
+            BluetoothScannerMode.ACTIVE if active else BluetoothScannerMode.PASSIVE
         )
 
     async def stop_scan(self) -> None:
         """Stop scanning."""
 
-    async def connect(
-        self, address: int, address_type: int, use_cache: bool
-    ) -> int:
+    async def connect(self, address: int, address_type: int, use_cache: bool) -> int:
         """Connect and return the negotiated MTU."""
         raise BluetoothProxyError(GATT_REQUEST_NOT_SUPPORTED)
 
@@ -199,9 +203,7 @@ class BluetoothProxy:
     async def read_descriptor(self, address: int, handle: int) -> bytes:
         raise BluetoothProxyError(GATT_NOT_CONNECTED)
 
-    async def write_descriptor(
-        self, address: int, handle: int, data: bytes
-    ) -> None:
+    async def write_descriptor(self, address: int, handle: int, data: bytes) -> None:
         raise BluetoothProxyError(GATT_NOT_CONNECTED)
 
     async def set_notify(
@@ -259,7 +261,9 @@ class BluetoothProxy:
             try:
                 await self.disconnect(address)
             except Exception:
-                logger.debug("Bluetooth disconnect during API cleanup failed", exc_info=True)
+                logger.debug(
+                    "Bluetooth disconnect during API cleanup failed", exc_info=True
+                )
             self._connection_owners.pop(address, None)
         notification_keys = [
             key for key, owner in self._notification_owners.items() if owner is client
@@ -273,7 +277,9 @@ class BluetoothProxy:
         if not self._advertisement_clients and self._scanner_running:
             await self._stop_scanner()
 
-    async def publish_advertisement(self, advertisement: BluetoothAdvertisement) -> None:
+    async def publish_advertisement(
+        self, advertisement: BluetoothAdvertisement
+    ) -> None:
         """Publish one backend advertisement to all subscribed API clients."""
         for client, flags in tuple(self._advertisement_clients.items()):
             if flags & int(BluetoothProxySubscriptionFlag.RAW_ADVERTISEMENTS):
@@ -411,9 +417,10 @@ class BluetoothProxy:
             BluetoothDeviceRequestType.CONNECT_V3_WITH_CACHE,
             BluetoothDeviceRequestType.CONNECT_V3_WITHOUT_CACHE,
         ):
-            if message.address not in self._connection_owners and len(
-                self._connection_owners
-            ) >= self.max_connections:
+            if (
+                message.address not in self._connection_owners
+                and len(self._connection_owners) >= self.max_connections
+            ):
                 await client.write_message(
                     BluetoothDeviceConnectionResponse(
                         address=message.address, connected=False, error=GATT_ERROR
@@ -599,7 +606,9 @@ class BluetoothProxy:
         *extra_args: Any,
     ) -> None:
         try:
-            await operation(message.address, message.handle, bytes(message.data), *extra_args)
+            await operation(
+                message.address, message.handle, bytes(message.data), *extra_args
+            )
             await client.write_message(
                 BluetoothGATTWriteResponse(
                     address=message.address, handle=message.handle
@@ -700,9 +709,11 @@ def _uuid_from_text(value: str) -> UUID:
 
 
 def _set_proto_uuid(
-    message: BluetoothGATTDescriptorProto
-    | BluetoothGATTCharacteristicProto
-    | BluetoothGATTServiceProto,
+    message: (
+        BluetoothGATTDescriptorProto
+        | BluetoothGATTCharacteristicProto
+        | BluetoothGATTServiceProto
+    ),
     value: str,
 ) -> None:
     uuid = _uuid_from_text(value)
@@ -773,13 +784,9 @@ def _encode_advertisement_data(advertisement: BluetoothAdvertisement) -> bytes:
         uuid = _uuid_from_text(uuid_text)
         short_uuid = uuid.int >> 96
         if short_uuid <= 0xFFFF:
-            _append_ad_structure(
-                result, 0x16, short_uuid.to_bytes(2, "little") + data
-            )
+            _append_ad_structure(result, 0x16, short_uuid.to_bytes(2, "little") + data)
         else:
             _append_ad_structure(result, 0x21, uuid.bytes_le + data)
     for company_id, data in advertisement.manufacturer_data.items():
-        _append_ad_structure(
-            result, 0xFF, company_id.to_bytes(2, "little") + data
-        )
+        _append_ad_structure(result, 0xFF, company_id.to_bytes(2, "little") + data)
     return bytes(result)

@@ -4,8 +4,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
-    ListEntitiesSelectResponse,
+from aioesphomeapi.api_pb2 import (
+    ListEntitiesSelectResponse,  # type: ignore
     SelectCommandRequest,
     SelectStateResponse,
 )

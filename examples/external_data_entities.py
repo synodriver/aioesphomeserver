@@ -62,9 +62,7 @@ class OperatingModeSelect(SelectEntity):
         await self.set_state(value)
 
 
-async def update_temperature(
-    sensor: SensorEntity, source: ExternalDataSource
-) -> None:
+async def update_temperature(sensor: SensorEntity, source: ExternalDataSource) -> None:
     while True:
         await sensor.set_state(await source.read_temperature())
         await asyncio.sleep(10)
@@ -87,7 +85,7 @@ async def main() -> None:
         model="Python external data adapter",
         project_name="aioesphomeserver.external-data-example",
         project_version="1.0.0",
-        encryption_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+        encryption_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
     )
     device.add_entity(temperature)
     device.add_entity(TargetTemperatureNumber(source))

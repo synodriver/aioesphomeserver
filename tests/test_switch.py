@@ -1,16 +1,17 @@
 import asyncio
 import logging
-import random
-import sys 
 import os
+import random
+import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from aioesphomeserver import Device, SwitchEntity, LightEntity
+from aioesphomeserver import Device, LightEntity, SwitchEntity
 from aioesphomeserver.light import LightCommandRequest
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
+
 
 class ToggleSwitch(SwitchEntity):
     def __init__(self, name):
@@ -21,7 +22,9 @@ class ToggleSwitch(SwitchEntity):
         try:
             while True:
                 self._state = not self._state
-                logging.info(f"Toggling switch {self.name} to {'ON' if self._state else 'OFF'}")
+                logging.info(
+                    f"Toggling switch {self.name} to {'ON' if self._state else 'OFF'}"
+                )
                 await self.set_state(self._state)
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
@@ -30,8 +33,11 @@ class ToggleSwitch(SwitchEntity):
 
     async def set_state(self, state):
         self._state = state
-        await self.device.log(3, self.DOMAIN, f"[{self.object_id}] Setting state to {state}")
+        await self.device.log(
+            3, self.DOMAIN, f"[{self.object_id}] Setting state to {state}"
+        )
         await self.notify_state_change()
+
 
 class RandomDimmer(LightEntity):
     def __init__(self, name):
@@ -41,20 +47,25 @@ class RandomDimmer(LightEntity):
     async def random_dimmer(self):
         try:
             while True:
-                brightness = random.uniform(0, 1)  # Set brightness as a float between 0 and 1
-                logging.info(f"Setting dimmer {self.name} brightness to {brightness * 100:.2f}%")
+                brightness = random.uniform(
+                    0, 1
+                )  # Set brightness as a float between 0 and 1
+                logging.info(
+                    f"Setting dimmer {self.name} brightness to {brightness * 100:.2f}%"
+                )
                 command = LightCommandRequest(
                     key=self.key,
                     has_state=True,
                     state=True,
                     has_brightness=True,
-                    brightness=brightness
+                    brightness=brightness,
                 )
                 await self.set_state_from_command(command)
                 await asyncio.sleep(5)
         except asyncio.CancelledError:
             logging.warning(f"RandomDimmer {self.name} was cancelled")
             raise
+
 
 async def run_device(name, api_port, web_port):
     logging.info(f"Setting up {name} with API port {api_port} and Web port {web_port}")
@@ -69,7 +80,7 @@ async def run_device(name, api_port, web_port):
         project_version="1.0.0",
         network="wifi",
         board="esp01_1m",
-        platform="ESP8266"
+        platform="ESP8266",
     )
 
     test_switch = ToggleSwitch(name=f"{name} Switch")
@@ -96,6 +107,7 @@ async def run_device(name, api_port, web_port):
     finally:
         await device.unregister_zeroconf()
 
+
 async def main():
     devices = [
         ("Test Device 1", 6053, 8081),
@@ -109,7 +121,10 @@ async def main():
         ("Test Device 9", 6061, 8089),
         ("Test Device 10", 6062, 8090),
     ]
-    await asyncio.gather(*(run_device(name, api_port, web_port) for name, api_port, web_port in devices))
+    await asyncio.gather(
+        *(run_device(name, api_port, web_port) for name, api_port, web_port in devices)
+    )
+
 
 if __name__ == "__main__":
     logging.info("Starting main event loop")

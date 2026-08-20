@@ -88,7 +88,9 @@ async def _test_official_client_can_read_entities():
 
 
 def test_device_capabilities_request_returns_bluetooth_proxy_capabilities():
-    asyncio.run(_test_device_capabilities_request_returns_bluetooth_proxy_capabilities())
+    asyncio.run(
+        _test_device_capabilities_request_returns_bluetooth_proxy_capabilities()
+    )
 
 
 async def _test_device_capabilities_request_returns_bluetooth_proxy_capabilities():

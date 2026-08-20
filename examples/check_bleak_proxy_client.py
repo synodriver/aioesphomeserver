@@ -8,9 +8,9 @@ Run the proxy first, then run this script from the same Python environment:
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import suppress
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -32,7 +32,9 @@ async def _check(host: str, port: int) -> int:
     try:
         async with asyncio.timeout(10):
             await client.connect()
-            device_info, entities, services = await client.device_info_and_list_entities()
+            device_info, entities, services = (
+                await client.device_info_and_list_entities()
+            )
         api_version = client.api_version
         feature_flags = device_info.bluetooth_proxy_feature_flags_compat(api_version)
 
@@ -41,10 +43,16 @@ async def _check(host: str, port: int) -> int:
         print(f"Device MAC: {device_info.mac_address}")
         print(f"Manufacturer: {device_info.manufacturer}")
         print(f"Model: {device_info.model}")
-        print(f"Project: {device_info.project_name or '<none>'} {device_info.project_version or ''}".rstrip())
+        print(
+            f"Project: {device_info.project_name or '<none>'} {device_info.project_version or ''}".rstrip()
+        )
         print(f"Web server port: {device_info.webserver_port}")
-        print(f"Bluetooth MAC: {device_info.bluetooth_mac_address or device_info.mac_address}")
-        print(f"Bluetooth feature flags: {feature_flags} ({_feature_names(feature_flags)})")
+        print(
+            f"Bluetooth MAC: {device_info.bluetooth_mac_address or device_info.mac_address}"
+        )
+        print(
+            f"Bluetooth feature flags: {feature_flags} ({_feature_names(feature_flags)})"
+        )
         print(f"Entity count: {len(entities)}")
         for entity in entities:
             print(

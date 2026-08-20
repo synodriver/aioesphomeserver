@@ -1,6 +1,6 @@
 import asyncio
-from unittest.mock import patch
 from typing import Any
+from unittest.mock import patch
 
 from aioesphomeapi import APIClient
 from aioesphomeapi.api_pb2 import (
@@ -112,7 +112,9 @@ async def _test_gatt_messages_are_translated_to_native_api_responses():
     assert client.messages[-2].services[0].short_uuid == 0x180D
     assert client.messages[-1].address == address
 
-    await proxy.handle_api_message(client, BluetoothGATTReadRequest(address=address, handle=2))
+    await proxy.handle_api_message(
+        client, BluetoothGATTReadRequest(address=address, handle=2)
+    )
     assert client.messages[-1].data == b"ok"
 
 
@@ -177,9 +179,7 @@ async def _test_official_client_can_register_bluetooth_scanner() -> None:
 
         # A backend such as Bleak that only exposes parsed fields must use the
         # structured response instead of claiming that it has original HCI bytes.
-        client.subscribe_bluetooth_le_advertisements(
-            structured_advertisements.append
-        )
+        client.subscribe_bluetooth_le_advertisements(structured_advertisements.append)
         async with asyncio.timeout(2):
             while not proxy._advertisement_clients or any(
                 proxy._advertisement_clients.values()
@@ -247,7 +247,9 @@ def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
         assert device.bluetooth_proxy is not None
 
         info = await device.build_device_info_response()
-        assert info.bluetooth_mac_address == device.bluetooth_proxy.bluetooth_mac_address
+        assert (
+            info.bluetooth_mac_address == device.bluetooth_proxy.bluetooth_mac_address
+        )
         assert info.bluetooth_proxy_feature_flags & int(
             BluetoothProxyFeature.FEATURE_STATE_AND_MODE
         )
@@ -256,8 +258,7 @@ def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
         )
 
         responses = [
-            await entity.build_list_entities_response()
-            for entity in device.entities
+            await entity.build_list_entities_response() for entity in device.entities
         ]
         text_sensors = [
             response
@@ -290,6 +291,7 @@ def test_bluetooth_proxy_normalizes_and_validates_adapter_mac() -> None:
 
 def test_bleak_example_maps_bluez_random_address_type() -> None:
     from bleak.backends.scanner import AdvertisementData
+
     from examples.bleak_proxy import _address_type
 
     advertisement = AdvertisementData(
@@ -299,7 +301,10 @@ def test_bleak_example_maps_bluez_random_address_type() -> None:
         service_uuids=[],
         tx_power=None,
         rssi=-60,
-        platform_data=("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF", {"AddressType": "random"}),
+        platform_data=(
+            "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+            {"AddressType": "random"},
+        ),
     )
     with patch("examples.bleak_proxy.sys.platform", "linux"):
         assert _address_type(advertisement) == 1
@@ -317,6 +322,7 @@ def test_bleak_example_fallback_identities_are_stable_and_distinct() -> None:
 
 def test_bleak_example_passive_scan_uses_bluez_patterns_and_falls_back() -> None:
     from bleak import BleakError
+
     from examples.bleak_proxy import BleakBluetoothProxy
 
     class FakeScanner:

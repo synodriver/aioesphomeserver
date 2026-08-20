@@ -1,27 +1,24 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-from aioesphomeapi.api_pb2 import DeviceInfoResponse
-from aioesphomeapi.model import BluetoothProxyFeature
-
-from .device_capabilities import DeviceCapabilitiesResponse
-from .logger import format_log
-
-from inspect import getframeinfo, stack
-
 import asyncio
 import base64
 import binascii
 import hashlib
-import socket
-import re
-import random
 import logging
-from zeroconf.asyncio import AsyncZeroconf
+import random
+import re
+import socket
+from inspect import getframeinfo, stack
+from typing import TYPE_CHECKING, Any
+
+from aioesphomeapi.api_pb2 import DeviceInfoResponse
+from aioesphomeapi.model import BluetoothProxyFeature
 from zeroconf import ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
 
 from .basic_entity import BasicEntity
+from .device_capabilities import DeviceCapabilitiesResponse
+from .logger import format_log
 
 if TYPE_CHECKING:
     from .bluetooth_proxy import BluetoothProxy
@@ -42,7 +39,9 @@ def _normalize_device_name(name: str) -> str:
     return normalized
 
 
-def _normalize_encryption_key(key: str | bytes | None) -> tuple[str | None, bytes | None]:
+def _normalize_encryption_key(
+    key: str | bytes | None,
+) -> tuple[str | None, bytes | None]:
     """Validate an ESPHome Noise PSK and return base64 and raw forms."""
     if key is None:
         return None, None
@@ -72,23 +71,24 @@ def _legacy_bluetooth_proxy_version(feature_flags: int) -> int:
         return 4
     return 3
 
+
 class Device:
     def __init__(
-            self,
-            name: str,
-            mac_address: str | None = None,
-            model: str | None = None,
-            project_name: str | None = None,
-            project_version: str | None = None,
-            manufacturer: str = "aioesphomeserver",
-            friendly_name: str | None = None,
-            suggested_area: str | None = None,
-            network: str | None = None,
-            board: str | None = None,
-            platform: str | None = None,
-            bluetooth_proxy: BluetoothProxy | None = None,
-            voice_assistant: VoiceAssistant | None = None,
-            encryption_key: str | bytes | None = None,
+        self,
+        name: str,
+        mac_address: str | None = None,
+        model: str | None = None,
+        project_name: str | None = None,
+        project_version: str | None = None,
+        manufacturer: str = "aioesphomeserver",
+        friendly_name: str | None = None,
+        suggested_area: str | None = None,
+        network: str | None = None,
+        board: str | None = None,
+        platform: str | None = None,
+        bluetooth_proxy: BluetoothProxy | None = None,
+        voice_assistant: VoiceAssistant | None = None,
+        encryption_key: str | bytes | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
         self.mac_address = mac_address or self._generate_mac_address()
@@ -118,21 +118,23 @@ class Device:
         self.web_port: int | None = None
 
     def _generate_mac_address(self) -> str:
-        return "02:00:00:%02x:%02x:%02x" % (random.randint(0, 255),
-                                            random.randint(0, 255),
-                                            random.randint(0, 255))
+        return "02:00:00:%02x:%02x:%02x" % (
+            random.randint(0, 255),
+            random.randint(0, 255),
+            random.randint(0, 255),
+        )
 
     def _get_ip_address(self) -> str:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.connect(('10.254.254.254', 1))
+            s.connect(("10.254.254.254", 1))
             ip_address = s.getsockname()[0]
         except Exception:
-            ip_address = '127.0.0.1'
+            ip_address = "127.0.0.1"
         finally:
             s.close()
         return ip_address
-    
+
     def get_ip_address(self) -> str:
         return self._get_ip_address()
 
@@ -167,7 +169,9 @@ class Device:
                 self.bluetooth_proxy.bluetooth_mac_address or self.mac_address
             )
         if self.voice_assistant is not None:
-            response.legacy_voice_assistant_version = self.voice_assistant.legacy_version
+            response.legacy_voice_assistant_version = (
+                self.voice_assistant.legacy_version
+            )
             response.voice_assistant_feature_flags = self.voice_assistant.feature_flags
         return response
 
@@ -187,7 +191,7 @@ class Device:
         formatted_log = format_log(level, tag, caller.lineno, message)
         print(formatted_log)
         try:
-            await self.publish(None, 'log', (level, formatted_log))
+            await self.publish(None, "log", (level, formatted_log))
         except Exception as e:
             logger.error(f"Error publishing log: {e}", exc_info=True)
 
@@ -241,7 +245,7 @@ class Device:
             try:
                 async with asyncio.TaskGroup() as tg:
                     for entity in self.entities:
-                        if hasattr(entity, 'run'):
+                        if hasattr(entity, "run"):
                             tg.create_task(entity.run())
 
                     await api_server.wait_started()
@@ -267,7 +271,7 @@ class Device:
         while self.running:
             try:
                 for entity in self.entities:
-                    if hasattr(entity, 'check_connection'):
+                    if hasattr(entity, "check_connection"):
                         await entity.check_connection()
                 await asyncio.sleep(30)  # Heartbeat every 30 seconds
             except Exception as e:
@@ -276,7 +280,7 @@ class Device:
     async def shutdown(self) -> None:
         self.running = False
         for entity in self.entities:
-            if hasattr(entity, 'stop'):
+            if hasattr(entity, "stop"):
                 await entity.stop()
         await self.unregister_zeroconf()
 
@@ -284,7 +288,7 @@ class Device:
         try:
             zeroconf = AsyncZeroconf()
             service_type = "_esphomelib._tcp.local."
-            
+
             service_name = f"{self.name}.{service_type}"
             ip_address = self._get_ip_address()
             hostname = f"{self.name}.local."
@@ -306,9 +310,7 @@ class Device:
                 properties["project_name"] = project_name
                 properties["project_version"] = project_version
             if self.encryption_key is not None:
-                properties["api_encryption"] = (
-                    "Noise_NNpsk0_25519_ChaChaPoly_SHA256"
-                )
+                properties["api_encryption"] = "Noise_NNpsk0_25519_ChaChaPoly_SHA256"
 
             service_info = ServiceInfo(
                 service_type,

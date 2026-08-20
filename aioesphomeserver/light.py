@@ -1,24 +1,22 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
+from functools import reduce
+from operator import ior
 from typing import Any
+from urllib import parse
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
-    LightCommandRequest,
+from aioesphomeapi import LightColorCapability
+from aioesphomeapi.api_pb2 import (
+    LightCommandRequest,  # type: ignore
     LightStateResponse,
     ListEntitiesLightResponse,
 )
+from aiohttp import web
+
 from .basic_entity import BasicEntity
 
-from operator import ior
-from functools import reduce
-from aiohttp import web
-from urllib import parse
-
-import json
-from aioesphomeapi import (
-    LightColorCapability,
-)
 
 class LightEntity(BasicEntity):
     DOMAIN = "light"
@@ -81,7 +79,6 @@ class LightEntity(BasicEntity):
             cold_white=self.cold_white,
             warm_white=self.warm_white,
             effect=self.effect,
-
         )
 
     async def state_json(self) -> str:
@@ -91,14 +88,10 @@ class LightEntity(BasicEntity):
             "name": self.name,
             "state": state,
             "brightness": int(self.brightness * 255),
-            "color": {
-                "r": self.red,
-                "g": self.green,
-                "b": self.blue
-            },
+            "color": {"r": self.red, "g": self.green, "b": self.blue},
             "effects": self.effects,
             "effect": self.effect,
-            "white_value": self.white
+            "white_value": self.white,
         }
         return json.dumps(data)
 
@@ -139,13 +132,26 @@ class LightEntity(BasicEntity):
         # }
 
         changed = False
-        for prop in ['state', 'brightness', 'white', 'effect', 'color_brightness', 'color_temperature', 'cold_white', 'warm_white', 'transition_length', 'flash_length']:
+        for prop in [
+            "state",
+            "brightness",
+            "white",
+            "effect",
+            "color_brightness",
+            "color_temperature",
+            "cold_white",
+            "warm_white",
+            "transition_length",
+            "flash_length",
+        ]:
             has_prop = f"has_{prop}"
             if hasattr(command, has_prop) and getattr(command, has_prop):
                 attr = getattr(command, prop)
                 current_attr = getattr(self, prop)
                 if attr != current_attr:
-                    await self.device.log(3, self.DOMAIN, f"[{self.object_id}] Setting {prop} to {attr}")
+                    await self.device.log(
+                        3, self.DOMAIN, f"[{self.object_id}] Setting {prop} to {attr}"
+                    )
                     setattr(self, prop, attr)
                     changed = True
 
@@ -181,22 +187,22 @@ class LightEntity(BasicEntity):
         # transition: Transition to the specified color values in this duration in seconds.
         # effect: Set an effect for the light.
         # color_temp: Set the color temperature of the light, in mireds.
-        cmd = LightCommandRequest(
-            has_state=True,
-            state=state
-        )
+        cmd = LightCommandRequest(has_state=True, state=state)
 
-        for prop in ['effect']:
+        for prop in ["effect"]:
             if prop in query:
                 setattr(cmd, f"has_{prop}", True)
                 setattr(cmd, prop, query[prop][0])
 
-        for query_name, command_name in [('brightness', 'brightness'), ('white_value', 'white')]:
+        for query_name, command_name in [
+            ("brightness", "brightness"),
+            ("white_value", "white"),
+        ]:
             if query_name in query:
                 setattr(cmd, f"has_{command_name}", True)
                 setattr(cmd, command_name, float(query[query_name][0]) / 255.0)
 
-        for short_color, color in [('r', 'red'), ('g', 'green'), ('b', 'blue')]:
+        for short_color, color in [("r", "red"), ("g", "green"), ("b", "blue")]:
             if short_color in query:
                 cmd.has_rgb = True
                 setattr(cmd, color, float(query[short_color][0]) / 255.0)
@@ -211,7 +217,9 @@ class LightEntity(BasicEntity):
     async def add_routes(self, router: web.UrlDispatcher) -> None:
         router.add_route("GET", f"/light/{self.object_id}", self.route_get_state)
         router.add_route("POST", f"/light/{self.object_id}/turn_on", self.route_turn_on)
-        router.add_route("POST", f"/light/{self.object_id}/turn_off", self.route_turn_off)
+        router.add_route(
+            "POST", f"/light/{self.object_id}/turn_off", self.route_turn_off
+        )
 
     async def route_get_state(self, request: web.Request) -> web.Response:
         data = await self.state_json()

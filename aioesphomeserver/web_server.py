@@ -9,6 +9,7 @@ from aiohttp_sse import sse_response
 
 from .basic_entity import BasicEntity
 
+
 class WebServer(BasicEntity):
     def __init__(self, *args: Any, port: int = 8080, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -16,9 +17,7 @@ class WebServer(BasicEntity):
         self.queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 
     async def index(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(
-            path=os.path.dirname(__file__) + '/index.html'
-        )
+        return web.FileResponse(path=os.path.dirname(__file__) + "/index.html")
 
     async def handle(self, key: str, message: Any) -> None:
         if key == "state_change":
@@ -56,10 +55,10 @@ class WebServer(BasicEntity):
 
         for entity in self.device.entities:
             await entity.add_routes(app.router)
-        
+
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', self.port)
+        site = web.TCPSite(runner, "0.0.0.0", self.port)
         await self.device.log(2, "web", f"Starting web server on port {self.port}!")
 
         await site.start()

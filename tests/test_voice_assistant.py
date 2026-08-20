@@ -196,7 +196,9 @@ async def _test_announcement_does_not_block_protocol_dispatch():
         ),
     )
     assert voice.event == VoiceAssistantEventType.VOICE_ASSISTANT_RUN_START
-    assert not any(isinstance(msg, VoiceAssistantAnnounceFinished) for msg in client.messages)
+    assert not any(
+        isinstance(msg, VoiceAssistantAnnounceFinished) for msg in client.messages
+    )
 
     voice.release.set()
     await _wait_for(
@@ -205,7 +207,9 @@ async def _test_announcement_does_not_block_protocol_dispatch():
         )
     )
     finished = next(
-        msg for msg in client.messages if isinstance(msg, VoiceAssistantAnnounceFinished)
+        msg
+        for msg in client.messages
+        if isinstance(msg, VoiceAssistantAnnounceFinished)
     )
     assert finished.success is True
 
