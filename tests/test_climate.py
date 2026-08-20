@@ -19,7 +19,7 @@ from aioesphomeapi.api_pb2 import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class TestClimateEntity(ClimateEntity):
+class ExampleClimateEntity(ClimateEntity):
     def __init__(self, device, name, object_id, **kwargs):
         super().__init__(name=name, object_id=object_id, **kwargs)
         self.device = device
@@ -105,7 +105,7 @@ class TestClimateEntity(ClimateEntity):
 
 async def main():
     device = Device(name="Test Climate", mac_address="22:01:43:22:48:01")
-    climate_entity = TestClimateEntity(
+    climate_entity = ExampleClimateEntity(
         device=device,
         name="Test Climate",
         object_id="test_climate",

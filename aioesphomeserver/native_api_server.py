@@ -1,328 +1,428 @@
 from __future__ import annotations
 
 import asyncio
-import socket
 import logging
+import time
+from typing import TYPE_CHECKING, Any
 
-from aioesphomeapi.api_pb2 import (  # type: ignore
-    AuthenticationRequest,
-    AuthenticationResponse,
-    DeviceInfoRequest,
-    DisconnectRequest,
-    DisconnectResponse,
-    GetTimeRequest,
-    GetTimeResponse,
-    HelloRequest,
-    HelloResponse,
-    ListEntitiesDoneResponse,
-    ListEntitiesRequest,
-    PingRequest,
-    PingResponse,
-    SubscribeHomeAssistantStatesRequest,
-    SubscribeHomeassistantServicesRequest,
-    SubscribeLogsRequest,
-    SubscribeLogsResponse,
-    SubscribeStatesRequest,
+from aioesphomeapi.api_pb2 import (
+    AuthenticationRequest,# type: ignore
+    AuthenticationResponse,# type: ignore
+    DeviceInfoRequest,# type: ignore
+    DisconnectRequest,# type: ignore
+    DisconnectResponse,# type: ignore
+    GetTimeRequest,# type: ignore
+    GetTimeResponse,# type: ignore
+    HelloRequest,# type: ignore
+    HelloResponse,# type: ignore
+    ListEntitiesDoneResponse,# type: ignore
+    ListEntitiesRequest,# type: ignore
+    PingRequest,# type: ignore
+    PingResponse,# type: ignore
+    SubscribeHomeAssistantStatesRequest,# type: ignore
+    SubscribeHomeassistantServicesRequest,# type: ignore
+    SubscribeLogsRequest, # type: ignore
+    SubscribeLogsResponse, # type: ignore
+    SubscribeStatesRequest, # type: ignore
 )
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
+from noise.connection import NoiseConnection
+from noise.exceptions import NoiseInvalidMessage
 
 from .basic_entity import BasicEntity
+from .device_capabilities import DeviceCapabilitiesRequest
 
-PROTO_TO_MESSAGE_TYPE = {v: k for k, v in MESSAGE_TYPE_TO_PROTO.items()}
+if TYPE_CHECKING:
+    from asyncio import StreamReader, StreamWriter
+    from google.protobuf.message import Message
+
+
+API_VERSION_MAJOR = 1
+API_VERSION_MINOR = 15
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024
+MAX_NOISE_FRAME_SIZE = 65535
+NOISE_HANDSHAKE_TIMEOUT = 10
+NOISE_PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
+NOISE_PROLOGUE = b"NoiseAPIInit"
+PROTO_TO_MESSAGE_TYPE = {proto: type_id for type_id, proto in MESSAGE_TYPE_TO_PROTO.items()}
 
 logger = logging.getLogger(__name__)
 
+
+class NativeApiProtocolError(Exception):
+    """Raised when a client sends an invalid native API frame."""
+
+
 def _varuint_to_bytes(value: int) -> bytes:
-    """Convert a varuint to bytes."""
-    if value <= 0x7F:
-        return bytes((value,))
+    """Encode a non-negative integer using protobuf varuint encoding."""
+    if value < 0:
+        raise ValueError("varuint cannot encode a negative value")
 
     result = bytearray()
-    while value:
-        temp = value & 0x7F
+    while value > 0x7F:
+        result.append((value & 0x7F) | 0x80)
         value >>= 7
-        if value:
-            result.append(temp | 0x80)
-        else:
-            result.append(temp)
+    result.append(value)
     return bytes(result)
 
+
 class NativeApiConnection:
-    def __init__(self, server, reader, writer):
+    """One plaintext or Noise-encrypted ESPHome native API connection."""
+
+    def __init__(
+        self,
+        server: "NativeApiServer",
+        reader: "StreamReader",
+        writer: "StreamWriter",
+    ) -> None:
         self.server = server
         self.reader = reader
         self.writer = writer
         self.subscribe_to_logs = False
         self.subscribe_to_states = False
         self.running = True
+        self._write_lock = asyncio.Lock()
+        self._noise: NoiseConnection | None = None
 
-    async def start(self):
-        while self.running:
-            try:
-                heartbeat_task = asyncio.create_task(self.heartbeat())
-                while self.running:
-                    await self.handle_next_message()
-            except ConnectionResetError:
-                logger.warning("Connection reset. Attempting to reconnect...")
-                await self.handle_connection_reset()
-            except asyncio.CancelledError:
-                logger.info("Connection cancelled. Shutting down...")
-                break
-            except Exception as e:
-                logger.error(f"Unexpected error in connection: {e}", exc_info=True)
-                await asyncio.sleep(5)  # Wait before retrying
-            finally:
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    pass
-
-    async def heartbeat(self):
-        while self.running:
-            try:
-                await asyncio.wait_for(self.write_message(PingRequest()), timeout=5.0)
-                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
-            except asyncio.TimeoutError:
-                logger.warning("Heartbeat timed out, attempting to reconnect...")
-                await self.handle_connection_reset()
-            except Exception as e:
-                logger.error(f"Heartbeat failed: {e}")
-                await self.handle_connection_reset()
-
-    async def handle_next_message(self):
+    async def start(self) -> None:
         try:
-            msg = await self.read_next_message()
+            if self.server.device.encryption_key_bytes is not None:
+                async with asyncio.timeout(NOISE_HANDSHAKE_TIMEOUT):
+                    await self._perform_noise_handshake(
+                        self.server.device.encryption_key_bytes
+                    )
+            while self.running:
+                message = await self.read_next_message()
+                if message is not None:
+                    await self.handle_message(message)
+        except (
+            asyncio.IncompleteReadError,
+            ConnectionResetError,
+            BrokenPipeError,
+            NoiseInvalidMessage,
+            NativeApiProtocolError,
+            TimeoutError,
+        ):
+            logger.debug("Native API client disconnected")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Native API connection failed")
+        finally:
+            await self.stop()
 
-            if msg is None:
-                return
+    async def handle_message(self, message: "Message") -> None:
+        await self.server.log(f"{type(message).__name__}: {message}")
 
-            await self.server.log(f"{type(msg)}: {msg}")
+        if type(message) is HelloRequest:
+            await self.write_message(
+                HelloResponse(
+                    api_version_major=API_VERSION_MAJOR,
+                    api_version_minor=API_VERSION_MINOR,
+                    server_info="aioesphomeserver",
+                    name=self.server.device.name,
+                )
+            )
+        elif type(message) is AuthenticationRequest:
+            await self.write_message(AuthenticationResponse(invalid_password=False))
+        elif type(message) is DisconnectRequest:
+            await self.write_message(DisconnectResponse())
+            self.running = False
+        elif type(message) is SubscribeLogsRequest:
+            self.subscribe_to_logs = True
+        elif type(message) is PingRequest:
+            await self.write_message(PingResponse())
+        elif type(message) is GetTimeRequest:
+            await self.write_message(
+                GetTimeResponse(epoch_seconds=int(time.time()), timezone="UTC")
+            )
+        elif type(message) is SubscribeStatesRequest:
+            self.subscribe_to_states = True
+            await self.server.send_all_states(self)
+        else:
+            await self.server.handle_client_request(self, message)
 
-            if type(msg) == HelloRequest:
-                await self.handle_hello(msg)
-            elif type(msg) == AuthenticationRequest:
-                await self.handle_authentication(msg)
-            elif type(msg) == DisconnectRequest:
-                await self.handle_disconnect(msg)
-            elif type(msg) == SubscribeLogsRequest:
-                await self.handle_subscribe_logs(msg)
-            elif type(msg) == PingRequest:
-                await self.handle_ping(msg)
-            elif type(msg) == SubscribeStatesRequest:
-                await self.handle_subscribe_states(msg)
-            else:
-                await self.server.handle_client_request(self, msg)
-        except asyncio.IncompleteReadError:
-            logger.warning("Incomplete read. Connection might be closed.")
-            raise ConnectionResetError
+    async def log(self, level: int, message: str) -> None:
+        await self.write_message(
+            SubscribeLogsResponse(level=level, message=message.encode("utf-8"))
+        )
 
-    async def handle_hello(self, msg):
-        resp = HelloResponse(api_version_major=1, api_version_minor=10)
-        await self.write_message(resp)
+    async def read_next_message(self) -> "Message | None":
+        if self._noise is not None:
+            return await self._read_noise_message()
 
-    async def handle_authentication(self, msg):
-        resp = AuthenticationResponse(invalid_password=False)
-        await self.write_message(resp)
-
-    async def handle_disconnect(self, msg):
-        resp = DisconnectResponse()
-        await self.write_message(resp)
-        await self.stop()
-
-    async def handle_subscribe_logs(self, msg):
-        self.subscribe_to_logs = True
-
-        resp = SubscribeLogsResponse()
-        resp.level = msg.level
-        resp.message = b'Subscribed to logs'
-
-        await self.write_message(resp)
-
-    async def handle_subscribe_states(self, msg):
-        self.subscribe_to_states = True
-        await self.server.log("Subscribed to states")
-        await self.server.send_all_states(self)
-
-    async def handle_ping(self, msg):
-        resp = PingResponse()
-        await self.write_message(resp)
-
-    async def log(self, message):
-        resp = SubscribeLogsResponse()
-        resp.message = str.encode(message)
-
-        await self.write_message(resp)
-
-    async def read_next_message(self):
         preamble = await self._read_varuint()
-        length = await self._read_varuint()
-        message_type = await self._read_varuint()
+        if preamble != 0:
+            raise ValueError(f"unsupported native API preamble: {preamble}")
 
-        klass = MESSAGE_TYPE_TO_PROTO.get(message_type)
-        if klass is None:
+        length = await self._read_varuint()
+        if length > MAX_MESSAGE_SIZE:
+            raise ValueError(f"native API message is too large: {length} bytes")
+        message_type = await self._read_varuint()
+        payload = await self.reader.readexactly(length)
+
+        message_class = MESSAGE_TYPE_TO_PROTO.get(message_type)
+        if message_class is None:
+            logger.warning("Ignoring unknown native API message type %s", message_type)
             return None
 
-        msg = klass()
-        msg_bytes = await self.reader.read(length)
+        message = message_class()
+        message.ParseFromString(payload)
+        return message
 
-        msg.MergeFromString(msg_bytes)
-
-        return msg
-
-    async def write_message(self, msg):
-        if msg is None:
+    async def write_message(self, message: "Message | None") -> None:
+        if message is None or not self.running:
             return
 
-        try:
-            out: list[bytes] = []
-            type_: int = PROTO_TO_MESSAGE_TYPE[type(msg)]
-            data = msg.SerializeToString()
+        message_type = PROTO_TO_MESSAGE_TYPE.get(type(message))
+        if message_type is None:
+            raise ValueError(f"unknown native API protobuf type: {type(message).__name__}")
 
-            out.append(b"\0")
-            out.append(_varuint_to_bytes(len(data)))
-            out.append(_varuint_to_bytes(type_))
-            out.append(data)
-
-            self.writer.write(b"".join(out))
+        payload = message.SerializeToString()
+        if self._noise is None:
+            frame = b"".join(
+                (
+                    b"\0",
+                    _varuint_to_bytes(len(payload)),
+                    _varuint_to_bytes(message_type),
+                    payload,
+                )
+            )
+        else:
+            if len(payload) > MAX_NOISE_FRAME_SIZE - 20:
+                raise ValueError(
+                    f"native API message is too large for Noise: {len(payload)} bytes"
+                )
+            plaintext = b"".join(
+                (
+                    message_type.to_bytes(2, "big"),
+                    len(payload).to_bytes(2, "big"),
+                    payload,
+                )
+            )
+            encrypted = self._noise.encrypt(plaintext)
+            frame = b"\x01" + len(encrypted).to_bytes(2, "big") + encrypted
+        async with self._write_lock:
+            self.writer.write(frame)
             await self.writer.drain()
-        except ConnectionResetError:
-            logger.warning("Connection reset while writing message.")
-            raise
 
-    async def _read_varuint(self):
+    async def _perform_noise_handshake(self, psk: bytes) -> None:
+        client_hello = await self._read_noise_frame()
+        prologue = NOISE_PROLOGUE + len(client_hello).to_bytes(2, "big") + client_hello
+
+        server_hello = b"".join(
+            (
+                b"\x01",
+                self.server.device.name.encode("utf-8"),
+                b"\0",
+                self.server.device.mac_address.replace(":", "").lower().encode(
+                    "ascii"
+                ),
+                b"\0",
+            )
+        )
+        await self._write_noise_frame(server_hello)
+
+        noise = NoiseConnection.from_name(NOISE_PROTOCOL_NAME)
+        noise.set_as_responder()
+        noise.set_psks(psk)
+        noise.set_prologue(prologue)
+        noise.start_handshake()
+
+        handshake = await self._read_noise_frame()
+        if not handshake or handshake[0] != 0:
+            await self._write_noise_rejection("Bad handshake error byte")
+            raise NativeApiProtocolError("invalid Noise handshake frame")
+        try:
+            noise.read_message(handshake[1:])
+            response = noise.write_message()
+        except Exception as err:
+            await self._write_noise_rejection("Handshake MAC failure")
+            raise NativeApiProtocolError("Noise handshake failed") from err
+
+        await self._write_noise_frame(b"\0" + response)
+        self._noise = noise
+
+    async def _read_noise_message(self) -> "Message | None":
+        assert self._noise is not None
+        decrypted = self._noise.decrypt(await self._read_noise_frame())
+        if len(decrypted) < 4:
+            raise NativeApiProtocolError("decrypted native API message is too short")
+        message_type = int.from_bytes(decrypted[:2], "big")
+        payload_length = int.from_bytes(decrypted[2:4], "big")
+        payload = decrypted[4:]
+        if payload_length != len(payload):
+            raise NativeApiProtocolError(
+                "decrypted native API message has an invalid length"
+            )
+
+        message_class = MESSAGE_TYPE_TO_PROTO.get(message_type)
+        if message_class is None:
+            logger.warning("Ignoring unknown native API message type %s", message_type)
+            return None
+        message = message_class()
+        message.ParseFromString(payload)
+        return message
+
+    async def _read_noise_frame(self) -> bytes:
+        header = await self.reader.readexactly(3)
+        if header[0] != 1:
+            await self._write_noise_rejection("Bad indicator byte")
+            raise NativeApiProtocolError(
+                f"unsupported Noise indicator: {header[0]}"
+            )
+        length = int.from_bytes(header[1:3], "big")
+        if length > MAX_NOISE_FRAME_SIZE:
+            raise NativeApiProtocolError(f"Noise frame is too large: {length} bytes")
+        return await self.reader.readexactly(length)
+
+    async def _write_noise_frame(self, payload: bytes) -> None:
+        if len(payload) > MAX_NOISE_FRAME_SIZE:
+            raise ValueError(f"Noise frame is too large: {len(payload)} bytes")
+        self.writer.write(b"\x01" + len(payload).to_bytes(2, "big") + payload)
+        await self.writer.drain()
+
+    async def _write_noise_rejection(self, reason: str) -> None:
+        await self._write_noise_frame(b"\x01" + reason.encode("ascii"))
+
+    async def _read_varuint(self) -> int:
         result = 0
-        bitpos = 0
-        while not self.reader.at_eof():
-            val_byte = await self.reader.read(1)
-            if len(val_byte) != 1:
-                return -1
-
-            val = val_byte[0]
-            result |= (val & 0x7F) << bitpos
-            if (val & 0x80) == 0:
+        for bit_position in range(0, 70, 7):
+            value = (await self.reader.readexactly(1))[0]
+            result |= (value & 0x7F) << bit_position
+            if not value & 0x80:
                 return result
-            bitpos += 7
-        return -1
+        raise ValueError("invalid native API varuint")
 
-    async def handle_connection_reset(self):
-        logger.info("Connection reset detected. Closing connection.")
-        
-        try:
-            await self.handle_disconnect(DisconnectRequest())
-        except Exception as e:
-            logger.error(f"Error during disconnect handling: {e}", exc_info=True)
-
-        try:
-            if not self.writer.is_closing():
-                self.writer.close()
-                await asyncio.wait_for(self.writer.wait_closed(), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.warning("Timed out waiting for writer to close")
-        except Exception as e:
-            logger.error(f"Error closing writer: {e}", exc_info=True)
-
-        # The connection will be removed from self._clients in the clean_stale_connections task
+    async def stop(self) -> None:
+        if not self.running and self.writer.is_closing():
+            return
         self.running = False
+        if not self.writer.is_closing():
+            self.writer.close()
+            try:
+                await self.writer.wait_closed()
+            except (ConnectionResetError, BrokenPipeError):
+                pass
 
-    async def stop(self):
-        self.running = False
-        self.writer.close()
-        await self.writer.wait_closed()
 
 class NativeApiServer(BasicEntity):
-    def __init__(self, *args, port=6053, **kwargs):
+    """ESPHome native API server with optional Noise encryption."""
+
+    def __init__(
+        self,
+        *args: Any,
+        port: int = 6053,
+        host: str = "0.0.0.0",
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.port = port
-        self._clients = set()
-        self.server = None
+        self.host = host
+        self.bound_port: int | None = None
+        self._clients: set[NativeApiConnection] = set()
+        self.server: asyncio.Server | None = None
+        self._started = asyncio.Event()
 
-    async def run(self):
-        self.server = await asyncio.start_server(self.handle_client, '0.0.0.0', self.port)
-        clean_task = asyncio.create_task(self.clean_stale_connections())
-        try:
-            await self.device.log(2, "api", f"starting on port {self.port}!")
-            async with self.server:
-                await self.server.serve_forever()
-        finally:
-            clean_task.cancel()
+    async def run(self) -> None:
+        self.server = await asyncio.start_server(self.handle_client, self.host, self.port)
+        sockets = self.server.sockets or []
+        self.bound_port = sockets[0].getsockname()[1] if sockets else self.port
+        self._started.set()
+        await self.device.log(2, "api", f"Starting on {self.host}:{self.bound_port}")
+        async with self.server:
+            await self.server.serve_forever()
 
-    async def log(self, message):
-        for client in self._clients:
+    async def wait_started(self) -> None:
+        """Wait until the TCP listener has successfully bound its port."""
+        await self._started.wait()
+
+    async def log(self, message: str) -> None:
+        for client in tuple(self._clients):
             if client.subscribe_to_logs:
-                await client.log(message)
+                await client.log(3, message)
 
-    async def handle_client(self, reader, writer):
+    async def handle_client(self, reader: "StreamReader", writer: "StreamWriter") -> None:
         connection = NativeApiConnection(self, reader, writer)
         self._clients.add(connection)
         try:
             await connection.start()
         finally:
-            self._clients.remove(connection)
+            self._clients.discard(connection)
+            bluetooth_proxy = self.device.bluetooth_proxy
+            if bluetooth_proxy is not None:
+                await bluetooth_proxy.on_api_client_disconnected(connection)
+            voice_assistant = self.device.voice_assistant
+            if voice_assistant is not None:
+                await voice_assistant.on_api_client_disconnected(connection)
 
-    async def handle_client_request(self, client, message):
-        if type(message) == SubscribeHomeassistantServicesRequest:
-            pass
-        elif type(message) == SubscribeHomeAssistantStatesRequest:
-            pass
-        elif type(message) == ListEntitiesRequest:
-            await self.handle_list_entities(client, message)
-        elif type(message) == DeviceInfoRequest:
-            await self.handle_device_info(client)
-        else:
-            await self.device.publish(self, 'client_request', message)
+    async def handle_client_request(
+        self, client: NativeApiConnection, message: "Message"
+    ) -> None:
+        if type(message) in (
+            SubscribeHomeassistantServicesRequest,
+            SubscribeHomeAssistantStatesRequest,
+        ):
+            return
+        if type(message) is ListEntitiesRequest:
+            await self.handle_list_entities(client)
+            return
+        if type(message) is DeviceInfoRequest:
+            await client.write_message(await self.device.build_device_info_response())
+            return
+        if type(message) is DeviceCapabilitiesRequest:
+            await client.write_message(
+                await self.device.build_device_capabilities_response()
+            )
+            return
 
-    async def handle_list_entities(self, client, message):
+        bluetooth_proxy = self.device.bluetooth_proxy
+        if bluetooth_proxy is not None and await bluetooth_proxy.handle_api_message(
+            client, message
+        ):
+            return
+        voice_assistant = self.device.voice_assistant
+        if voice_assistant is not None and await voice_assistant.handle_api_message(
+            client, message
+        ):
+            return
+        await self.device.publish(self, "client_request", message)
+
+    async def handle_list_entities(self, client: NativeApiConnection) -> None:
         for entity in self.device.entities:
-            msg = await entity.build_list_entities_response()
-            if msg != None:
-                await client.write_message(msg)
+            message = await entity.build_list_entities_response()
+            if message is not None:
+                await client.write_message(message)
+        await client.write_message(ListEntitiesDoneResponse())
 
-        done_msg = ListEntitiesDoneResponse()
-        await client.write_message(done_msg)
-
-    async def handle_device_info(self, client):
-        msg = await self.device.build_device_info_response()
-        await client.write_message(msg)
-
-    async def send_all_states(self, client):
+    async def send_all_states(self, client: NativeApiConnection) -> None:
         for entity in self.device.entities:
-            msg = await entity.build_state_response()
-            if msg == None:
-                continue
-            await client.write_message(msg)
+            message = await entity.build_state_response()
+            if message is not None:
+                await client.write_message(message)
 
-    async def handle(self, key, message):
-        if key == 'state_change':
-            for client in self._clients:
+    async def handle(self, key: str, message: Any) -> None:
+        if key == "state_change":
+            for client in tuple(self._clients):
                 if client.subscribe_to_states:
                     await client.write_message(message)
-
-        if key == 'log':
-            msg = SubscribeLogsResponse(
-                level = message[0],
-                message = str.encode(message[1])
-            )
-
-            for client in self._clients:
+        elif key == "log":
+            level, text = message
+            for client in tuple(self._clients):
                 if client.subscribe_to_logs:
-                    await client.write_message(msg)
+                    await client.log(level, text)
 
-    async def stop(self):
-        if self.server:
+    async def stop(self) -> None:
+        if self.server is not None:
             self.server.close()
             await self.server.wait_closed()
-        for client in list(self._clients):
-            await client.stop()
-        self._clients.clear()
+            self.server = None
+        self.bound_port = None
+        self._started.clear()
+        if self._clients:
+            await asyncio.gather(*(client.stop() for client in tuple(self._clients)))
+            self._clients.clear()
 
-    async def restart(self):
+    async def restart(self) -> None:
         await self.stop()
         await self.run()
-
-    async def clean_stale_connections(self):
-        while True:
-            for client in list(self._clients):
-                if client.writer.is_closing():
-                    self._clients.remove(client)
-            await asyncio.sleep(60)  # Run every minute

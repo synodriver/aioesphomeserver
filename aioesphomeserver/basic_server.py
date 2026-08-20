@@ -1,23 +1,23 @@
 import asyncio
+from typing import Any
 
-from . import (
-    BinarySensorEntity,
-    Device,
-    EntityListener,
-    NativeApiServer,
-    SwitchEntity,
-    SwitchStateResponse,
-    WebServer,
-    LightEntity,
-    SensorEntity,
-)
+from .binary_sensor import BinarySensorEntity
+from .device import Device
+from .listener import EntityListener
+from .native_api_server import NativeApiServer
+from .switch import SwitchEntity
+from .web_server import WebServer
+from .light import LightEntity
+from .sensor import SensorEntity
 
 from aioesphomeapi import LightColorCapability
 
 class SwitchListener(EntityListener):
-    async def handle(self, key, message):
+    async def handle(self, key: str, message: Any) -> None:
+        if self.device is None:
+            return
         sensor = self.device.get_entity("test_binary_sensor")
-        if sensor != None:
+        if isinstance(sensor, BinarySensorEntity):
             await sensor.set_state(message.state)
 
 if __name__ == "__main__":

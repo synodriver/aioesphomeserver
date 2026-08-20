@@ -1,0 +1,260 @@
+import asyncio
+import json
+from unittest.mock import AsyncMock
+from unittest.mock import patch
+
+import pytest
+from aioesphomeapi import APIClient, LightColorCapability
+from aioesphomeapi.api_pb2 import ClimateMode, SwitchStateResponse
+from aiohttp.test_utils import make_mocked_request
+
+from aioesphomeserver import (
+    BinarySensorEntity,
+    ClimateEntity,
+    Device,
+    EntityListener,
+    LightEntity,
+    SensorEntity,
+    WebServer,
+)
+
+
+def test_device_entity_management_and_publish():
+    async def run() -> None:
+        device = Device(name="Device", mac_address="02:00:00:00:00:10")
+        sensor = SensorEntity(name="Temperature")
+        listener = AsyncMock()
+        listener.object_id = "listener"
+        listener.device = None
+        listener.key = None
+        listener.can_handle.return_value = True
+        device.add_entity(sensor)
+        device.add_entity(listener)
+
+        assert device.get_entity("temperature") is sensor
+        assert device.get_entity_by_key(sensor.key) is sensor
+        assert device.get_entity_by_key(0) is None
+        await device.publish(sensor, "custom", {"value": 1})
+        listener.can_handle.assert_awaited_once_with("custom", {"value": 1})
+        listener.handle.assert_awaited_once_with("custom", {"value": 1})
+
+        with pytest.raises(ValueError, match="Duplicate object_id"):
+            device.add_entity(SensorEntity(name="Temperature"))
+
+    asyncio.run(run())
+
+
+def test_device_uses_matching_esphome_node_and_friendly_names():
+    async def run() -> None:
+        device = Device(
+            name="External Data Device",
+            mac_address="02:00:00:00:00:15",
+        )
+        assert device.name == "external-data-device"
+        info = await device.build_device_info_response()
+        assert info.name == "external-data-device"
+        assert info.friendly_name == "External Data Device"
+
+    asyncio.run(run())
+
+
+def test_zeroconf_uses_api_node_name_and_standard_txt_records():
+    async def run() -> None:
+        device = Device(
+            name="External Data Device",
+            mac_address="02:00:00:00:00:16",
+            project_name="aioesphomeserver.example",
+            project_version="1.0.0",
+        )
+        zeroconf = AsyncMock()
+        with (
+            patch("aioesphomeserver.device.AsyncZeroconf", return_value=zeroconf),
+            patch.object(device, "_get_ip_address", return_value="192.0.2.1"),
+        ):
+            result = await device.register_zeroconf(6053)
+
+        assert result is zeroconf
+        service = zeroconf.async_register_service.await_args.args[0]
+        assert service.name == "external-data-device._esphomelib._tcp.local."
+        assert service.server == "external-data-device.local."
+        assert service.properties[b"version"] == b"0.0.1"
+        assert service.properties[b"project_name"] == b"aioesphomeserver.example"
+        assert service.properties[b"project_version"] == b"1.0.0"
+        assert service.properties[b"config_hash"]
+
+    asyncio.run(run())
+
+
+def test_encrypted_device_advertises_noise():
+    async def run() -> None:
+        device = Device(
+            name="encrypted-device",
+            encryption_key=bytes(range(32)),
+        )
+        zeroconf = AsyncMock()
+        with (
+            patch("aioesphomeserver.device.AsyncZeroconf", return_value=zeroconf),
+            patch.object(device, "_get_ip_address", return_value="192.0.2.2"),
+        ):
+            await device.register_zeroconf(6053)
+
+        service = zeroconf.async_register_service.await_args.args[0]
+        assert service.properties[b"api_encryption"] == (
+            b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
+        )
+        info = await device.build_device_info_response()
+        assert info.api_encryption_supported is True
+        assert info.api_encryption_provisionable is False
+
+    asyncio.run(run())
+
+
+def test_device_run_starts_api_before_announcing():
+    async def run() -> None:
+        class RecordingDevice(Device):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="Run Order",
+                    mac_address="02:00:00:00:00:17",
+                )
+                self.announced = asyncio.Event()
+
+            async def register_zeroconf(self, port: int) -> None:
+                api = self.get_entity("_server")
+                assert api is not None
+                assert api.bound_port == port
+                self.announced.set()
+                return None
+
+        device = RecordingDevice()
+        device.add_entity(SensorEntity(name="Temperature"))
+        task = asyncio.create_task(device.run(api_port=0, web_port=None))
+        try:
+            await asyncio.wait_for(device.announced.wait(), timeout=2)
+            assert device.web_port is None
+            client = APIClient(
+                "127.0.0.1",
+                device.api_port,
+                expected_name="run-order",
+            )
+            await client.connect(login=True)
+            info = await client.device_info()
+            assert info.name == "run-order"
+            await client.disconnect(force=True)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_binary_sensor_and_entity_listener_flow():
+    async def run() -> None:
+        class SwitchToBinary(EntityListener):
+            async def handle(self, key: str, message: object) -> None:
+                binary = self.device.get_entity("door")
+                await binary.set_state(bool(getattr(message, "state", False)))
+
+        device = Device(name="Listener device", mac_address="02:00:00:00:00:14")
+        binary = BinarySensorEntity(name="Door", object_id="door")
+        listener = SwitchToBinary(name="Listener", entity_id="relay")
+        device.add_entity(binary)
+        device.add_entity(listener)
+        switch_state = SwitchStateResponse(key=99, state=True)
+        assert await listener.can_handle("state_change", switch_state) is False
+        listener.entity_id = "door"
+        binary.key = 99
+        assert await listener.can_handle("state_change", switch_state) is True
+        await listener.handle("state_change", switch_state)
+        assert await binary.get_state() is True
+        assert json.loads(await binary.state_json())["state"] == "ON"
+
+    asyncio.run(run())
+
+
+def test_light_http_style_commands_update_state_json():
+    async def run() -> None:
+        light = LightEntity(
+            name="Desk light",
+            color_modes=(LightColorCapability.RGB,),
+            effects=("rainbow",),
+        )
+        device = Device(name="Light device", mac_address="02:00:00:00:00:11")
+        device.add_entity(light)
+        light.notify_state_change = AsyncMock()
+
+        await light.set_state_from_query(
+            True,
+            {
+                "brightness": ["128"],
+                "white_value": ["64"],
+                "r": ["255"],
+                "g": ["64"],
+                "b": ["32"],
+                "effect": ["rainbow"],
+            },
+        )
+        state = json.loads(await light.state_json())
+        assert state["state"] == "ON"
+        assert state["brightness"] == 128
+        assert state["white_value"] == pytest.approx(64 / 255)
+        assert state["color"] == {"r": 1.0, "g": pytest.approx(64 / 255), "b": pytest.approx(32 / 255)}
+        light.notify_state_change.assert_awaited_once()
+
+        response = await light.route_turn_off(
+            make_mocked_request("POST", "/light/desk_light/turn_off?brightness=255")
+        )
+        assert response.status == 200
+        assert json.loads(response.text)["state"] == "OFF"
+
+    asyncio.run(run())
+
+
+def test_climate_http_style_command_and_state_json():
+    async def run() -> None:
+        climate = ClimateEntity(
+            name="Thermostat",
+            supported_modes=(ClimateMode.CLIMATE_MODE_OFF, ClimateMode.CLIMATE_MODE_HEAT),
+            supports_current_temperature=True,
+        )
+        device = Device(name="Climate device", mac_address="02:00:00:00:00:12")
+        device.add_entity(climate)
+        climate.notify_state_change = AsyncMock()
+
+        await climate.set_state_from_query(mode="heat", target_temperature=22)
+        state = json.loads(await climate.state_json())
+        assert state["mode"] == "HEAT"
+        assert state["target_temperature"] == 22
+        climate.notify_state_change.assert_awaited_once()
+
+        request = AsyncMock()
+        request.json.return_value = {"mode": "off"}
+        response = await climate.route_set_mode(request)
+        assert response.status == 200
+        assert json.loads(response.text)["mode"] == "OFF"
+
+    asyncio.run(run())
+
+
+def test_web_server_routes_and_event_queue():
+    async def run() -> None:
+        device = Device(name="Web device", mac_address="02:00:00:00:00:13")
+        sensor = SensorEntity(name="Temperature")
+        web_server = WebServer(name="_web", port=0)
+        device.add_entity(sensor)
+        device.add_entity(web_server)
+
+        index = await web_server.index(make_mocked_request("GET", "/"))
+        assert index.__class__.__name__ == "FileResponse"
+        assert str(index._path).endswith("index.html")
+
+        await sensor.set_state(12.5)
+        assert (await web_server.queue.get())[0] == "log"
+        event = await web_server.queue.get()
+        assert event[0] == "state"
+        assert json.loads(event[1])["state"] == 12.5
+
+        await web_server.handle("log", (3, "hello"))
+        assert await web_server.queue.get() == ("log", (3, "hello"))
+
+    asyncio.run(run())

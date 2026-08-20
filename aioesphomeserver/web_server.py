@@ -1,23 +1,26 @@
+from __future__ import annotations
+
 import asyncio
 import os
+from typing import Any
 
 from aiohttp import web
 from aiohttp_sse import sse_response
 
-from . import BasicEntity
+from .basic_entity import BasicEntity
 
 class WebServer(BasicEntity):
-    def __init__(self, *args, port=8080, **kwargs):
+    def __init__(self, *args: Any, port: int = 8080, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.port = port
-        self.queue = asyncio.Queue()
+        self.queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 
-    async def index(self, _request):
+    async def index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(
             path=os.path.dirname(__file__) + '/index.html'
         )
 
-    async def handle(self, key, message):
+    async def handle(self, key: str, message: Any) -> None:
         if key == "state_change":
             key = message.key
             entity = self.device.get_entity_by_key(key)
@@ -27,7 +30,7 @@ class WebServer(BasicEntity):
         if key == "log":
             await self.queue.put(("log", message))
 
-    async def events(self, request):
+    async def events(self, request: web.Request) -> web.StreamResponse:
         async with sse_response(request) as resp:
             for entity in self.device.entities:
                 data = await entity.state_json()
@@ -46,7 +49,7 @@ class WebServer(BasicEntity):
 
         return resp
 
-    async def run(self):
+    async def run(self) -> None:
         app = web.Application()
         app.router.add_route("GET", "/events", self.events)
         app.router.add_route("GET", "/", self.index)

@@ -1,4 +1,14 @@
-from . import BasicEntity, ListEntitiesLightResponse, LightStateResponse, LightCommandRequest
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from aioesphomeapi.api_pb2 import (  # type: ignore
+    LightCommandRequest,
+    LightStateResponse,
+    ListEntitiesLightResponse,
+)
+from .basic_entity import BasicEntity
 
 from operator import ior
 from functools import reduce
@@ -13,7 +23,13 @@ from aioesphomeapi import (
 class LightEntity(BasicEntity):
     DOMAIN = "light"
 
-    def __init__(self, *args, color_modes=[LightColorCapability.ON_OFF], effects=None, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        color_modes: Sequence[int] = (LightColorCapability.ON_OFF,),
+        effects: Sequence[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
 
         self.supported_color_modes = color_modes
@@ -38,19 +54,19 @@ class LightEntity(BasicEntity):
         self.blue = 1.0
         self.white = 1.0
 
-    async def build_list_entities_response(self):
+    async def build_list_entities_response(self) -> ListEntitiesLightResponse:
         return ListEntitiesLightResponse(
             object_id=self.object_id,
             key=self.key,
             name=self.name,
-            unique_id=self.unique_id,
             supported_color_modes=self.supported_color_modes,
             effects=self.effects,
+            disabled_by_default=self.disabled_by_default,
             icon=self.icon,
             entity_category=self.entity_category,
         )
 
-    async def build_state_response(self):
+    async def build_state_response(self) -> LightStateResponse:
         return LightStateResponse(
             key=self.key,
             state=self.state,
@@ -68,7 +84,7 @@ class LightEntity(BasicEntity):
 
         )
 
-    async def state_json(self):
+    async def state_json(self) -> str:
         state = "ON" if self.state else "OFF"
         data = {
             "id": self.json_id,
@@ -78,7 +94,7 @@ class LightEntity(BasicEntity):
             "color": {
                 "r": self.red,
                 "g": self.green,
-                "b": self.green
+                "b": self.blue
             },
             "effects": self.effects,
             "effect": self.effect,
@@ -86,7 +102,7 @@ class LightEntity(BasicEntity):
         }
         return json.dumps(data)
 
-    async def set_state_from_command(self, command):
+    async def set_state_from_command(self, command: LightCommandRequest) -> None:
         # message LightCommandRequest {
         #   option (id) = 32;
         #   option (source) = SOURCE_CLIENT;
@@ -149,7 +165,13 @@ class LightEntity(BasicEntity):
         if changed:
             await self.notify_state_change()
 
-    async def set_state_from_query(self, state, query):
+    async def on_command(self, command: LightCommandRequest) -> None:
+        """Handle a light command requested by Home Assistant."""
+        await self.set_state_from_command(command)
+
+    async def set_state_from_query(
+        self, state: bool, query: Mapping[str, Sequence[str]]
+    ) -> None:
         # brightness: The brightness of the light, from 0 to 255.
         # r: The red color channel of the light, from 0 to 255.
         # g: The green color channel of the light, from 0 to 255.
@@ -169,10 +191,10 @@ class LightEntity(BasicEntity):
                 setattr(cmd, f"has_{prop}", True)
                 setattr(cmd, prop, query[prop][0])
 
-        for prop in ['brightness', 'white_value']:
-            if prop in query:
-                setattr(cmd, f"has_{prop}", True)
-                setattr(cmd, prop, float(query[prop][0]) / 255.0)
+        for query_name, command_name in [('brightness', 'brightness'), ('white_value', 'white')]:
+            if query_name in query:
+                setattr(cmd, f"has_{command_name}", True)
+                setattr(cmd, command_name, float(query[query_name][0]) / 255.0)
 
         for short_color, color in [('r', 'red'), ('g', 'green'), ('b', 'blue')]:
             if short_color in query:
@@ -181,28 +203,28 @@ class LightEntity(BasicEntity):
 
         await self.set_state_from_command(cmd)
 
-    async def handle(self, key, message):
+    async def handle(self, key: str, message: Any) -> None:
         if type(message) == LightCommandRequest:
             if message.key == self.key:
-                await self.set_state_from_command(message)
+                await self.on_command(message)
 
-    async def add_routes(self, router):
+    async def add_routes(self, router: web.UrlDispatcher) -> None:
         router.add_route("GET", f"/light/{self.object_id}", self.route_get_state)
         router.add_route("POST", f"/light/{self.object_id}/turn_on", self.route_turn_on)
         router.add_route("POST", f"/light/{self.object_id}/turn_off", self.route_turn_off)
 
-    async def route_get_state(self, request):
+    async def route_get_state(self, request: web.Request) -> web.Response:
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_turn_on(self, request):
+    async def route_turn_on(self, request: web.Request) -> web.Response:
         query = parse.parse_qs(request.query_string)
         await self.set_state_from_query(True, query)
 
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_turn_off(self, request):
+    async def route_turn_off(self, request: web.Request) -> web.Response:
         query = parse.parse_qs(request.query_string)
         await self.set_state_from_query(False, query)
 

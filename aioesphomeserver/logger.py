@@ -24,7 +24,7 @@ LOG_LEVEL_LETTERS = [
 
 LOG_RESET = "\033[0m"
 
-def format_log(level, tag, line_number, message):
+def format_log(level: int, tag: str, line_number: int, message: str) -> str:
     color = LOG_LEVEL_COLORS[level]
     letter = LOG_LEVEL_LETTERS[level]
         

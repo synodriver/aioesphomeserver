@@ -1,4 +1,14 @@
-from . import BasicEntity, ListEntitiesClimateResponse, ClimateStateResponse, ClimateCommandRequest
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from aioesphomeapi.api_pb2 import (  # type: ignore
+    ClimateCommandRequest,
+    ClimateStateResponse,
+    ListEntitiesClimateResponse,
+)
+from .basic_entity import BasicEntity
 from aiohttp import web
 import logging
 import json
@@ -15,25 +25,25 @@ logger = logging.getLogger(__name__)
 class ClimateEntity(BasicEntity):
     DOMAIN = "climate"
 
-    def __init__(self, *args, 
-                 supported_modes=None,
-                 supports_two_point_target_temperature=False,
-                 visual_min_temperature=0, 
-                 visual_max_temperature=100,
-                 visual_target_temperature_step=0.1, 
-                 supports_fan_mode=False,
-                 supported_fan_modes=None,
-                 supports_swing_mode=False,
-                 supported_swing_modes=None,
-                 supports_action=False,
-                 supports_current_temperature=True,
-                 supports_current_humidity=False,
-                 supports_target_humidity=False,
-                 visual_min_humidity=0,
-                 visual_max_humidity=100,
-                 supports_preset=False,
-                 supported_presets=None,
-                 **kwargs):
+    def __init__(self, *args: Any,
+                 supported_modes: Sequence[int] | None = None,
+                 supports_two_point_target_temperature: bool = False,
+                 visual_min_temperature: float = 0,
+                 visual_max_temperature: float = 100,
+                 visual_target_temperature_step: float = 0.1,
+                 supports_fan_mode: bool = False,
+                 supported_fan_modes: Sequence[int] | None = None,
+                 supports_swing_mode: bool = False,
+                 supported_swing_modes: Sequence[int] | None = None,
+                 supports_action: bool = False,
+                 supports_current_temperature: bool = True,
+                 supports_current_humidity: bool = False,
+                 supports_target_humidity: bool = False,
+                 visual_min_humidity: float = 0,
+                 visual_max_humidity: float = 100,
+                 supports_preset: bool = False,
+                 supported_presets: Sequence[int] | None = None,
+                 **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         
         self.supported_modes = supported_modes or [ClimateMode.OFF]
@@ -79,12 +89,11 @@ class ClimateEntity(BasicEntity):
                     f"supports_humidity={self.supports_current_humidity or self.supports_target_humidity}, "
                     f"supports_preset={self.supports_preset}")
 
-    async def build_list_entities_response(self):
+    async def build_list_entities_response(self) -> ListEntitiesClimateResponse:
         response = ListEntitiesClimateResponse(
             object_id=self.object_id,
             key=self.key,
             name=self.name,
-            unique_id=self.unique_id,
             supported_modes=self.supported_modes,
             visual_min_temperature=self.visual_min_temperature,
             visual_max_temperature=self.visual_max_temperature,
@@ -99,11 +108,12 @@ class ClimateEntity(BasicEntity):
             visual_min_humidity=self.visual_min_humidity,
             visual_max_humidity=self.visual_max_humidity,
             supported_presets=self.supported_presets,
+            disabled_by_default=self.disabled_by_default,
         )
         logger.info(f"Building list entities response for {self.object_id}: {response}")
         return response
 
-    async def build_state_response(self):
+    async def build_state_response(self) -> ClimateStateResponse:
         return ClimateStateResponse(
             key=self.key,
             mode=self.mode,
@@ -119,7 +129,7 @@ class ClimateEntity(BasicEntity):
             preset=self.preset,
         )
 
-    async def state_json(self):
+    async def state_json(self) -> str:
         state = await self.build_state_response()
         data = {
             "id": self.json_id,
@@ -140,7 +150,7 @@ class ClimateEntity(BasicEntity):
             data["target_temperature"] = state.target_temperature
         return json.dumps(data)
 
-    async def set_state_from_command(self, command):
+    async def set_state_from_command(self, command: ClimateCommandRequest) -> None:
         changed = False
         for prop in ['mode', 'target_temperature', 'target_temperature_low', 'target_temperature_high', 'fan_mode', 'swing_mode', 'preset', 'target_humidity']:
             has_prop = f"has_{prop}"
@@ -155,7 +165,15 @@ class ClimateEntity(BasicEntity):
         if changed:
             await self.notify_state_change()
 
-    async def set_state_from_query(self, **query):
+    async def on_command(self, command: ClimateCommandRequest) -> None:
+        """Handle a climate command requested by Home Assistant."""
+        await self.set_state_from_command(command)
+
+    async def handle(self, key: str, message: Any) -> None:
+        if type(message) is ClimateCommandRequest and message.key == self.key:
+            await self.on_command(message)
+
+    async def set_state_from_query(self, **query: Any) -> None:
         cmd = ClimateCommandRequest(key=self.key)
 
         if 'mode' in query:
@@ -192,7 +210,7 @@ class ClimateEntity(BasicEntity):
 
         await self.set_state_from_command(cmd)
 
-    async def add_routes(self, router):
+    async def add_routes(self, router: web.UrlDispatcher) -> None:
         router.add_route("GET", f"/climate/{self.object_id}", self.route_get_state)
         router.add_route("POST", f"/climate/{self.object_id}/set", self.route_set_state)
         router.add_route("POST", f"/climate/{self.object_id}/set_mode", self.route_set_mode)
@@ -210,59 +228,59 @@ class ClimateEntity(BasicEntity):
         if self.supports_target_humidity:
             router.add_route("POST", f"/climate/{self.object_id}/set_target_humidity", self.route_set_target_humidity)
 
-    async def route_get_state(self, request):
+    async def route_get_state(self, request: web.Request) -> web.Response:
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_state(self, request):
+    async def route_set_state(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(**query)
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_mode(self, request):
+    async def route_set_mode(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(mode=query.get('mode'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_target_temperature(self, request):
+    async def route_set_target_temperature(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(target_temperature=query.get('target_temperature'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_target_temperature_low(self, request):
+    async def route_set_target_temperature_low(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(target_temperature_low=query.get('target_temperature_low'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_target_temperature_high(self, request):
+    async def route_set_target_temperature_high(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(target_temperature_high=query.get('target_temperature_high'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_fan_mode(self, request):
+    async def route_set_fan_mode(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(fan_mode=query.get('fan_mode'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_swing_mode(self, request):
+    async def route_set_swing_mode(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(swing_mode=query.get('swing_mode'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_preset(self, request):
+    async def route_set_preset(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(preset=query.get('preset'))
         data = await self.state_json()
         return web.Response(text=data)
 
-    async def route_set_target_humidity(self, request):
+    async def route_set_target_humidity(self, request: web.Request) -> web.Response:
         query = await request.json()
         await self.set_state_from_query(target_humidity=query.get('target_humidity'))
         data = await self.state_json()
