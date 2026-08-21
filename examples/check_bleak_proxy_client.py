@@ -41,6 +41,7 @@ async def _check(host: str, port: int) -> int:
         print(f"API version: {api_version}")
         print(f"Device name: {device_info.name}")
         print(f"Device MAC: {device_info.mac_address}")
+        print(f"ESPHome version: {device_info.esphome_version}")
         print(f"Manufacturer: {device_info.manufacturer}")
         print(f"Model: {device_info.model}")
         print(

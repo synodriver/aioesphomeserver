@@ -50,11 +50,13 @@ def test_device_uses_matching_esphome_node_and_friendly_names():
         device = Device(
             name="External Data Device",
             mac_address="02:00:00:00:00:15",
+            esphome_version="2026.8.21",
         )
         assert device.name == "external-data-device"
         info = await device.build_device_info_response()
         assert info.name == "external-data-device"
         assert info.friendly_name == "External Data Device"
+        assert info.esphome_version == "2026.8.21"
 
     asyncio.run(run())
 
@@ -111,6 +113,7 @@ def test_zeroconf_uses_api_node_name_and_standard_txt_records():
         device = Device(
             name="External Data Device",
             mac_address="02:00:00:00:00:16",
+            esphome_version="2026.8.21",
             project_name="aioesphomeserver.example",
             project_version="1.0.0",
         )
@@ -125,7 +128,7 @@ def test_zeroconf_uses_api_node_name_and_standard_txt_records():
         service = zeroconf.async_register_service.await_args.args[0]
         assert service.name == "external-data-device._esphomelib._tcp.local."
         assert service.server == "external-data-device.local."
-        assert service.properties[b"version"] == b"0.0.1"
+        assert service.properties[b"version"] == b"2026.8.21"
         assert service.properties[b"project_name"] == b"aioesphomeserver.example"
         assert service.properties[b"project_version"] == b"1.0.0"
         assert service.properties[b"config_hash"]

@@ -80,6 +80,7 @@ class Device:
         model: str | None = None,
         project_name: str | None = None,
         project_version: str | None = None,
+        esphome_version: str = "0.0.1",
         manufacturer: str = "aioesphomeserver",
         friendly_name: str | None = None,
         suggested_area: str | None = None,
@@ -95,6 +96,7 @@ class Device:
         self.model = model
         self.project_name = project_name
         self.project_version = project_version
+        self.esphome_version = esphome_version
         self.manufacturer = manufacturer
         self.friendly_name = friendly_name or (name if name != self.name else None)
         self.suggested_area = suggested_area
@@ -149,7 +151,7 @@ class Device:
             uses_password=False,
             name=self.name,
             mac_address=self.mac_address,
-            esphome_version="0.0.1",
+            esphome_version=self.esphome_version,
             model=self.model or "Python",
             project_name=project_name,
             project_version=project_version,
@@ -302,7 +304,7 @@ class Device:
                 "board": self.board or "esp01_1m",
                 "platform": self.platform or "ESP8266",
                 "mac": self.mac_address.replace(":", "").lower(),
-                "version": "0.0.1",
+                "version": self.esphome_version,
                 "config_hash": config_hash,
                 "friendly_name": self.friendly_name or self.name,
             }

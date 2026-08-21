@@ -11,6 +11,7 @@ async def main() -> None:
         friendly_name="Python ESPHome Device",
         mac_address="02:00:00:00:10:01",
         model="Python host",
+        esphome_version="1145.1.4",
         project_name="aioesphomeserver.example",
         project_version="1.0.0",
     )
