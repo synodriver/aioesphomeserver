@@ -58,6 +58,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "aiohttp-sse" },
     { name = "colored" },
+    { name = "noiseprotocol" },
     { name = "zeroconf" },
 ]
 
@@ -73,6 +74,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.1" },
     { name = "aiohttp-sse", specifier = ">=2.2.0" },
     { name = "colored", specifier = ">=2.3.2" },
+    { name = "noiseprotocol", specifier = ">=0.3.1" },
     { name = "zeroconf", specifier = ">=0.150.0" },
 ]
 
