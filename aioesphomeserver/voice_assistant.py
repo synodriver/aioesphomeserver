@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from google.protobuf.message import Message
 
-    from .native_api_server import NativeApiConnection
+    from aioesphomeserver.native_api_server import NativeApiConnection
 
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ from google.protobuf.message import Message
 if TYPE_CHECKING:
     from aiohttp.web_urldispatcher import UrlDispatcher
 
-    from .device import Device
+    from aioesphomeserver.device import Device
 
 
 class BasicEntity:

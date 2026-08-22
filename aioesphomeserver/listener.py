@@ -1,6 +1,6 @@
 from typing import Any
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class EntityListener(BasicEntity):

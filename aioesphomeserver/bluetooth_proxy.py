@@ -62,8 +62,8 @@ from aioesphomeapi.model import (
 if TYPE_CHECKING:
     from google.protobuf.message import Message
 
-    from .device import Device
-    from .native_api_server import NativeApiConnection
+    from aioesphomeserver.device import Device
+    from aioesphomeserver.native_api_server import NativeApiConnection
 
 
 logger = logging.getLogger(__name__)

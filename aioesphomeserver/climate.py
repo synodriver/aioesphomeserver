@@ -19,7 +19,7 @@ from aioesphomeapi.api_pb2 import (
 )
 from aiohttp import web
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 logger = logging.getLogger(__name__)
 

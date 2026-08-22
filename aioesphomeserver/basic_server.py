@@ -3,14 +3,14 @@ from typing import Any
 
 from aioesphomeapi import LightColorCapability
 
-from .binary_sensor import BinarySensorEntity
-from .device import Device
-from .light import LightEntity
-from .listener import EntityListener
-from .native_api_server import NativeApiServer
-from .sensor import SensorEntity
-from .switch import SwitchEntity
-from .web_server import WebServer
+from aioesphomeserver.binary_sensor import BinarySensorEntity
+from aioesphomeserver.device import Device
+from aioesphomeserver.light import LightEntity
+from aioesphomeserver.listener import EntityListener
+from aioesphomeserver.native_api_server import NativeApiServer
+from aioesphomeserver.sensor import SensorEntity
+from aioesphomeserver.switch import SwitchEntity
+from aioesphomeserver.web_server import WebServer
 
 
 class SwitchListener(EntityListener):

@@ -15,7 +15,7 @@ from aioesphomeapi.api_pb2 import (
 )
 from aiohttp import web
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class LightEntity(BasicEntity):

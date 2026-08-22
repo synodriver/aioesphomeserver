@@ -1,3 +1,35 @@
-from .additional_entities import EventEntity
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+from aioesphomeapi.api_pb2 import EventResponse, ListEntitiesEventResponse
+from aioesphomeserver.basic_entity import BasicEntity
 
 __all__ = ["EventEntity"]
+
+class EventEntity(BasicEntity):
+    DOMAIN = "event"
+
+    def __init__(
+        self, *args: Any, event_types: Sequence[str] = (), **kwargs: Any
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.event_types = list(event_types)
+
+    async def build_list_entities_response(self) -> ListEntitiesEventResponse:
+        return ListEntitiesEventResponse(
+            object_id=self.object_id,
+            key=self.key,
+            name=self.name,
+            icon=self.icon,
+            entity_category=self.entity_category,
+            device_class=self.device_class or "",
+            event_types=self.event_types,
+        )
+
+    async def trigger(self, event_type: str) -> None:
+        await self.device.publish(
+            self,
+            "state_change",
+            EventResponse(key=self.key, event_type=str(event_type)),
+        )

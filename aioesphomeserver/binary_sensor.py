@@ -8,7 +8,7 @@ from aioesphomeapi.api_pb2 import (
     ListEntitiesBinarySensorResponse,
 )
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class BinarySensorEntity(BasicEntity):

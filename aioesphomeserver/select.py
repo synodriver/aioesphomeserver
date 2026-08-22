@@ -10,7 +10,7 @@ from aioesphomeapi.api_pb2 import (
     SelectStateResponse,
 )
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class SelectEntity(BasicEntity):

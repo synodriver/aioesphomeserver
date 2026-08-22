@@ -28,8 +28,8 @@ from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from noise.connection import NoiseConnection
 from noise.exceptions import NoiseInvalidMessage
 
-from .basic_entity import BasicEntity
-from .device_capabilities import DeviceCapabilitiesRequest
+from aioesphomeserver.basic_entity import BasicEntity
+from aioesphomeserver.device_capabilities import DeviceCapabilitiesRequest
 
 if TYPE_CHECKING:
     from asyncio import StreamReader, StreamWriter

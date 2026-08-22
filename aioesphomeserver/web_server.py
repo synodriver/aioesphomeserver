@@ -7,7 +7,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp_sse import sse_response
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class WebServer(BasicEntity):

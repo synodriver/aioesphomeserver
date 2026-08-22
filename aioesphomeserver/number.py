@@ -9,7 +9,7 @@ from aioesphomeapi.api_pb2 import (
     NumberStateResponse,
 )
 
-from .basic_entity import BasicEntity
+from aioesphomeserver.basic_entity import BasicEntity
 
 
 class NumberEntity(BasicEntity):

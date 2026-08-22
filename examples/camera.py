@@ -18,8 +18,14 @@ CAMERA_STREAM_DURATION = 5.0
 class ExampleCamera(CameraEntity):
     """Bridge an application camera into ESPHome snapshot/stream requests."""
 
-    def __init__(self) -> None:
-        super().__init__(name="Camera", object_id="camera", icon="mdi:camera")
+    def __init__(
+        self,
+        *,
+        name: str = "Camera",
+        object_id: str = "camera",
+        icon: str = "mdi:camera",
+    ) -> None:
+        super().__init__(name=name, object_id=object_id, icon=icon)
         self._stream_task: asyncio.Task[None] | None = None
 
     async def capture_frame(self) -> bytes:
@@ -38,6 +44,8 @@ class ExampleCamera(CameraEntity):
                 while True:
                     await self.send_image(await self.capture_frame())
                     await asyncio.sleep(0.2)
+        except TimeoutError:
+            pass
         finally:
             self._stream_task = None
 

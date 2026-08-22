@@ -17,15 +17,15 @@ from aioesphomeapi.model import BluetoothProxyFeature
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
-from .basic_entity import BasicEntity
-from .device_capabilities import DeviceCapabilitiesResponse
-from .logger import format_log
-from .services import SupportsResponseType
+from aioesphomeserver.basic_entity import BasicEntity
+from aioesphomeserver.device_capabilities import DeviceCapabilitiesResponse
+from aioesphomeserver.logger import format_log
+from aioesphomeserver.services import SupportsResponseType
 
 if TYPE_CHECKING:
-    from .bluetooth_proxy import BluetoothProxy
-    from .services import ServiceArgType, UserService
-    from .voice_assistant import VoiceAssistant
+    from aioesphomeserver.bluetooth_proxy import BluetoothProxy
+    from aioesphomeserver.services import ServiceArgType, UserService
+    from aioesphomeserver.voice_assistant import VoiceAssistant
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ class Device:
         supports_response: SupportsResponseType | str | int = SupportsResponseType.NONE,
     ) -> UserService:
         """Expose a Python callback as an ESPHome user-defined API action."""
-        from .services import UserService
+        from aioesphomeserver.services import UserService
 
         service = UserService(
             name,
@@ -261,7 +261,7 @@ class Device:
         return self.entities[key - 1]
 
     async def run(self, api_port: int = 6053, web_port: int | None = 8080) -> None:
-        from . import NativeApiServer, WebServer
+        from aioesphomeserver import NativeApiServer, WebServer
 
         self.api_port = api_port
         self.web_port = web_port
