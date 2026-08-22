@@ -15,6 +15,7 @@ from aioesphomeapi.api_pb2 import GetTimeResponse  # type: ignore
 from aioesphomeapi.api_pb2 import HelloRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HelloResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesDoneResponse  # type: ignore
+from aioesphomeapi.api_pb2 import ExecuteServiceRequest  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesRequest  # type: ignore
 from aioesphomeapi.api_pb2 import PingRequest  # type: ignore
 from aioesphomeapi.api_pb2 import PingResponse  # type: ignore
@@ -38,9 +39,13 @@ if TYPE_CHECKING:
 
 API_VERSION_MAJOR = 1
 API_VERSION_MINOR = 15
-MAX_MESSAGE_SIZE = 10 * 1024 * 1024
+# ESPHome's native API uses a uint16 length on the wire.  Keep the plaintext
+# path aligned with the Noise path and the official Python client.
+MAX_MESSAGE_SIZE = 65535
 MAX_NOISE_FRAME_SIZE = 65535
 NOISE_HANDSHAKE_TIMEOUT = 10
+CLIENT_HELLO_TIMEOUT = 60
+DEFAULT_MAX_CONNECTIONS = 6
 NOISE_PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
 NOISE_PROLOGUE = b"NoiseAPIInit"
 PROTO_TO_MESSAGE_TYPE = {
@@ -84,6 +89,7 @@ class NativeApiConnection:
         self.running = True
         self._write_lock = asyncio.Lock()
         self._noise: NoiseConnection | None = None
+        self._service_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         try:
@@ -92,8 +98,14 @@ class NativeApiConnection:
                     await self._perform_noise_handshake(
                         self.server.device.encryption_key_bytes
                     )
+            first_message = True
             while self.running:
-                message = await self.read_next_message()
+                if first_message and self._noise is None:
+                    async with asyncio.timeout(CLIENT_HELLO_TIMEOUT):
+                        message = await self.read_next_message()
+                else:
+                    message = await self.read_next_message()
+                first_message = False
                 if message is not None:
                     await self.handle_message(message)
         except (
@@ -113,7 +125,7 @@ class NativeApiConnection:
             await self.stop()
 
     async def handle_message(self, message: "Message") -> None:
-        await self.server.log(f"{type(message).__name__}: {message}")
+        await self.server.log(type(message).__name__)
 
         if type(message) is HelloRequest:
             await self.write_message(
@@ -140,6 +152,10 @@ class NativeApiConnection:
         elif type(message) is SubscribeStatesRequest:
             self.subscribe_to_states = True
             await self.server.send_all_states(self)
+        elif type(message) is ExecuteServiceRequest:
+            task = asyncio.create_task(self.server.execute_service(self, message))
+            self._service_tasks.add(task)
+            task.add_done_callback(self._service_tasks.discard)
         else:
             await self.server.handle_client_request(self, message)
 
@@ -154,11 +170,13 @@ class NativeApiConnection:
 
         preamble = await self._read_varuint()
         if preamble != 0:
-            raise ValueError(f"unsupported native API preamble: {preamble}")
+            raise NativeApiProtocolError(f"unsupported native API preamble: {preamble}")
 
         length = await self._read_varuint()
         if length > MAX_MESSAGE_SIZE:
-            raise ValueError(f"native API message is too large: {length} bytes")
+            raise NativeApiProtocolError(
+                f"native API message is too large: {length} bytes"
+            )
         message_type = await self._read_varuint()
         payload = await self.reader.readexactly(length)
 
@@ -183,6 +201,10 @@ class NativeApiConnection:
 
         payload = message.SerializeToString()
         if self._noise is None:
+            if len(payload) > MAX_MESSAGE_SIZE:
+                raise NativeApiProtocolError(
+                    f"native API message is too large: {len(payload)} bytes"
+                )
             frame = b"".join(
                 (
                     b"\0",
@@ -286,17 +308,25 @@ class NativeApiConnection:
 
     async def _read_varuint(self) -> int:
         result = 0
-        for bit_position in range(0, 70, 7):
+        for bit_position in range(0, 28, 7):
             value = (await self.reader.readexactly(1))[0]
             result |= (value & 0x7F) << bit_position
             if not value & 0x80:
                 return result
-        raise ValueError("invalid native API varuint")
+        raise NativeApiProtocolError("invalid native API varuint")
 
     async def stop(self) -> None:
         if not self.running and self.writer.is_closing():
             return
         self.running = False
+        if self._service_tasks:
+            for task in self._service_tasks:
+                task.cancel()
+            await asyncio.gather(
+                *(task for task in tuple(self._service_tasks) if not task.done()),
+                return_exceptions=True,
+            )
+            self._service_tasks.clear()
         if not self.writer.is_closing():
             self.writer.close()
             try:
@@ -313,11 +343,15 @@ class NativeApiServer(BasicEntity):
         *args: Any,
         port: int = 6053,
         host: str = "0.0.0.0",
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.port = port
         self.host = host
+        if max_connections < 1:
+            raise ValueError("max_connections must be positive")
+        self.max_connections = max_connections
         self.bound_port: int | None = None
         self._clients: set[NativeApiConnection] = set()
         self.server: asyncio.Server | None = None
@@ -346,6 +380,11 @@ class NativeApiServer(BasicEntity):
     async def handle_client(
         self, reader: "StreamReader", writer: "StreamWriter"
     ) -> None:
+        if len(self._clients) >= self.max_connections:
+            logger.warning("Rejecting native API client: connection limit reached")
+            writer.close()
+            await writer.wait_closed()
+            return
         connection = NativeApiConnection(self, reader, writer)
         self._clients.add(connection)
         try:
@@ -396,7 +435,18 @@ class NativeApiServer(BasicEntity):
             message = await entity.build_list_entities_response()
             if message is not None:
                 await client.write_message(message)
+        for service in self.device.services:
+            await client.write_message(service.list_entities_response())
         await client.write_message(ListEntitiesDoneResponse())
+
+    async def execute_service(
+        self, client: NativeApiConnection, message: ExecuteServiceRequest
+    ) -> None:
+        for service in self.device.services:
+            if message.key == service.key:
+                await service.execute(message, client)
+                return
+        logger.warning("Ignoring unknown user service key %s", message.key)
 
     async def send_all_states(self, client: NativeApiConnection) -> None:
         for entity in self.device.entities:

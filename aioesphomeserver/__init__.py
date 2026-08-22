@@ -26,6 +26,7 @@ from .number import *
 from .radio_frequency import *
 from .select import *
 from .sensor import *
+from .services import *
 from .siren import *
 from .switch import *
 from .text import *

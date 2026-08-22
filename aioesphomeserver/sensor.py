@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import BasicEntity, ListEntitiesSensorResponse, SensorStateResponse
+from aioesphomeapi.api_pb2 import ListEntitiesSensorResponse, SensorStateResponse
+
+from .basic_entity import BasicEntity
 
 
 class SensorEntity(BasicEntity):

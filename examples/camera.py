@@ -12,6 +12,7 @@ from aioesphomeserver import CameraEntity, Device
 DEMO_JPEG = base64.b64decode(
     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAwAEADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAT/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCPAVJgAAAAAAAAAAAAAAAAAAAAAH//2Q=="
 )
+CAMERA_STREAM_DURATION = 5.0
 
 
 class ExampleCamera(CameraEntity):
@@ -33,9 +34,10 @@ class ExampleCamera(CameraEntity):
 
     async def _stream_frames(self) -> None:
         try:
-            while True:
-                await self.send_image(await self.capture_frame())
-                await asyncio.sleep(0.2)
+            async with asyncio.timeout(CAMERA_STREAM_DURATION):
+                while True:
+                    await self.send_image(await self.capture_frame())
+                    await asyncio.sleep(0.2)
         finally:
             self._stream_task = None
 

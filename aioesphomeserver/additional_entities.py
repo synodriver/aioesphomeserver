@@ -61,8 +61,20 @@ from aioesphomeapi.api_pb2 import (  # type: ignore
     WaterHeaterCommandRequest,
     WaterHeaterStateResponse,
 )
+from aioesphomeapi.model import (  # type: ignore
+    AlarmControlPanelCommand,
+    AlarmControlPanelState,
+    LockCommand,
+    LockState,
+    MediaPlayerCommand,
+    MediaPlayerState,
+    WaterHeaterCommandField,
+    WaterHeaterStateFlag,
+)
 
 from .basic_entity import BasicEntity
+
+CAMERA_IMAGE_CHUNK_SIZE = 1390
 
 
 class _StateEntity(BasicEntity):
@@ -373,7 +385,13 @@ class LockEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: LockCommandRequest) -> None:
-        await self.set_state(command.command)
+        state = {
+            LockCommand.UNLOCK: LockState.UNLOCKED,
+            LockCommand.LOCK: LockState.LOCKED,
+            LockCommand.OPEN: LockState.OPEN,
+        }.get(command.command)
+        if state is not None:
+            await self.set_state(state)
 
     async def handle(self, key: str, message: Any) -> None:
         if type(message) is LockCommandRequest and message.key == self.key:
@@ -424,11 +442,29 @@ class MediaPlayerEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: MediaPlayerCommandRequest) -> None:
+        changed = False
         if command.has_volume:
             self.volume = command.volume
+            changed = True
         if command.has_command:
-            self.state = command.command
-        await self._publish_state()
+            state = {
+                MediaPlayerCommand.PLAY: MediaPlayerState.PLAYING,
+                MediaPlayerCommand.PAUSE: MediaPlayerState.PAUSED,
+                MediaPlayerCommand.STOP: MediaPlayerState.IDLE,
+                MediaPlayerCommand.TURN_ON: MediaPlayerState.ON,
+                MediaPlayerCommand.TURN_OFF: MediaPlayerState.OFF,
+            }.get(command.command)
+            if state is not None:
+                self.state = state
+                changed = True
+            elif command.command == MediaPlayerCommand.MUTE:
+                self.muted = True
+                changed = True
+            elif command.command == MediaPlayerCommand.UNMUTE:
+                self.muted = False
+                changed = True
+        if changed:
+            await self._publish_state()
 
     async def handle(self, key: str, message: Any) -> None:
         if type(message) is MediaPlayerCommandRequest and message.key == self.key:
@@ -548,6 +584,8 @@ class WaterHeaterEntity(_StateEntity):
         *args: Any,
         current_temperature: float = 0.0,
         target_temperature: float = 0.0,
+        target_temperature_low: float = 0.0,
+        target_temperature_high: float = 0.0,
         mode: int = 0,
         state: int = 0,
         **kwargs: Any,
@@ -555,6 +593,8 @@ class WaterHeaterEntity(_StateEntity):
         super().__init__(*args, **kwargs)
         self.current_temperature = current_temperature
         self.target_temperature = target_temperature
+        self.target_temperature_low = target_temperature_low
+        self.target_temperature_high = target_temperature_high
         self.mode = mode
         self.state = state
         self.min_temperature = 0.0
@@ -586,6 +626,8 @@ class WaterHeaterEntity(_StateEntity):
             target_temperature=self.target_temperature,
             mode=self.mode,
             state=self.state,
+            target_temperature_low=self.target_temperature_low,
+            target_temperature_high=self.target_temperature_high,
         )
 
     async def get_state(self) -> float:
@@ -596,10 +638,41 @@ class WaterHeaterEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: WaterHeaterCommandRequest) -> None:
-        if command.HasField("target_temperature"):
-            await self.set_state(command.target_temperature)
-        if command.HasField("mode"):
+        has_fields = command.has_fields
+        changed = False
+        if has_fields & WaterHeaterCommandField.MODE:
             self.mode = command.mode
+            changed = True
+        if has_fields & WaterHeaterCommandField.TARGET_TEMPERATURE:
+            self.target_temperature = command.target_temperature
+            changed = True
+        if has_fields & WaterHeaterCommandField.TARGET_TEMPERATURE_LOW:
+            self.target_temperature_low = command.target_temperature_low
+            changed = True
+        if has_fields & WaterHeaterCommandField.TARGET_TEMPERATURE_HIGH:
+            self.target_temperature_high = command.target_temperature_high
+            changed = True
+        if has_fields & (
+            WaterHeaterCommandField.AWAY_STATE | WaterHeaterCommandField.STATE
+        ):
+            away = bool(command.state & WaterHeaterStateFlag.AWAY)
+            self.state = (
+                self.state | int(WaterHeaterStateFlag.AWAY)
+                if away
+                else self.state & ~int(WaterHeaterStateFlag.AWAY)
+            )
+            changed = True
+        if has_fields & (
+            WaterHeaterCommandField.ON_STATE | WaterHeaterCommandField.STATE
+        ):
+            on = bool(command.state & WaterHeaterStateFlag.ON)
+            self.state = (
+                self.state | int(WaterHeaterStateFlag.ON)
+                if on
+                else self.state & ~int(WaterHeaterStateFlag.ON)
+            )
+            changed = True
+        if changed:
             await self._publish_state()
 
     async def handle(self, key: str, message: Any) -> None:
@@ -650,7 +723,17 @@ class AlarmControlPanelEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: AlarmControlPanelCommandRequest) -> None:
-        await self.set_state(command.command)
+        state = {
+            AlarmControlPanelCommand.DISARM: AlarmControlPanelState.DISARMED,
+            AlarmControlPanelCommand.ARM_AWAY: AlarmControlPanelState.ARMED_AWAY,
+            AlarmControlPanelCommand.ARM_HOME: AlarmControlPanelState.ARMED_HOME,
+            AlarmControlPanelCommand.ARM_NIGHT: AlarmControlPanelState.ARMED_NIGHT,
+            AlarmControlPanelCommand.ARM_VACATION: AlarmControlPanelState.ARMED_VACATION,
+            AlarmControlPanelCommand.ARM_CUSTOM_BYPASS: AlarmControlPanelState.ARMED_CUSTOM_BYPASS,
+            AlarmControlPanelCommand.TRIGGER: AlarmControlPanelState.TRIGGERED,
+        }.get(command.command)
+        if state is not None:
+            await self.set_state(state)
 
     async def handle(self, key: str, message: Any) -> None:
         if type(message) is AlarmControlPanelCommandRequest and message.key == self.key:
@@ -867,11 +950,16 @@ class CameraEntity(BasicEntity):
             await self.on_command(message.single, message.stream)
 
     async def send_image(self, data: bytes, done: bool = True) -> None:
-        await self.device.publish(
-            self,
-            "state_change",
-            CameraImageResponse(key=self.key, data=data, done=done),
-        )
+        for offset in range(0, max(len(data), 1), CAMERA_IMAGE_CHUNK_SIZE):
+            chunk = data[offset : offset + CAMERA_IMAGE_CHUNK_SIZE]
+            is_last = offset + len(chunk) >= len(data)
+            await self.device.publish(
+                self,
+                "state_change",
+                CameraImageResponse(
+                    key=self.key, data=chunk, done=done if is_last else False
+                ),
+            )
 
 
 class InfraredEntity(BasicEntity):

@@ -3,7 +3,9 @@ import inspect
 
 from aioesphomeapi import APIClient
 from aioesphomeapi.model import (
+    AlarmControlPanelCommand,
     AlarmControlPanelInfo,
+    AlarmControlPanelState,
     ButtonInfo,
     CameraInfo,
     CoverInfo,
@@ -13,7 +15,11 @@ from aioesphomeapi.model import (
     FanInfo,
     InfraredInfo,
     LockInfo,
+    LockCommand,
+    LockState,
+    MediaPlayerCommand,
     MediaPlayerInfo,
+    MediaPlayerState,
     NumberInfo,
     RadioFrequencyInfo,
     SelectInfo,
@@ -25,6 +31,8 @@ from aioesphomeapi.model import (
     UpdateInfo,
     ValveInfo,
     WaterHeaterInfo,
+    WaterHeaterMode,
+    WaterHeaterStateFlag,
 )
 
 from aioesphomeserver import (
@@ -146,6 +154,97 @@ async def _test_core_command_hooks_with_official_client():
         assert switch.commands == [True]
         assert light.commands[0].brightness == 0.5
         assert climate.commands[0].target_temperature == 23.0
+    finally:
+        if client is not None:
+            await client.disconnect()
+        await api.stop()
+        server_task.cancel()
+        await asyncio.gather(server_task, return_exceptions=True)
+
+
+def test_command_enums_are_translated_to_entity_states():
+    asyncio.run(_test_command_enums_are_translated_to_entity_states())
+
+
+async def _test_command_enums_are_translated_to_entity_states():
+    lock = LockEntity(name="Lock")
+    media_player = MediaPlayerEntity(name="Media player")
+    alarm = AlarmControlPanelEntity(name="Alarm")
+    water_heater = WaterHeaterEntity(name="Water heater")
+    device = Device(name="Command states", mac_address="02:00:00:00:00:07")
+    for entity in (lock, media_player, alarm, water_heater):
+        device.add_entity(entity)
+    api = NativeApiServer(name="_api", port=0, host="127.0.0.1")
+    device.add_entity(api)
+    server_task = asyncio.create_task(api.run())
+    client = None
+    try:
+        await _wait_for(lambda: api.bound_port is not None)
+        client = APIClient("127.0.0.1", api.bound_port, keepalive=60)
+        await client.connect()
+        await client.device_info_and_list_entities()
+
+        for command, state in (
+            (LockCommand.UNLOCK, LockState.UNLOCKED),
+            (LockCommand.LOCK, LockState.LOCKED),
+            (LockCommand.OPEN, LockState.OPEN),
+        ):
+            client.lock_command(lock.key, command)
+            await _wait_for(lambda state=state: lock.state == state)
+
+        for command, state in (
+            (MediaPlayerCommand.PLAY, MediaPlayerState.PLAYING),
+            (MediaPlayerCommand.PAUSE, MediaPlayerState.PAUSED),
+            (MediaPlayerCommand.STOP, MediaPlayerState.IDLE),
+            (MediaPlayerCommand.TURN_ON, MediaPlayerState.ON),
+            (MediaPlayerCommand.TURN_OFF, MediaPlayerState.OFF),
+        ):
+            client.media_player_command(media_player.key, command=command)
+            await _wait_for(lambda state=state: media_player.state == state)
+        client.media_player_command(
+            media_player.key, command=MediaPlayerCommand.MUTE, volume=0.25
+        )
+        await _wait_for(lambda: media_player.muted and media_player.volume == 0.25)
+        client.media_player_command(
+            media_player.key, command=MediaPlayerCommand.UNMUTE
+        )
+        await _wait_for(lambda: not media_player.muted)
+
+        for command, state in (
+            (AlarmControlPanelCommand.ARM_AWAY, AlarmControlPanelState.ARMED_AWAY),
+            (AlarmControlPanelCommand.ARM_HOME, AlarmControlPanelState.ARMED_HOME),
+            (AlarmControlPanelCommand.ARM_NIGHT, AlarmControlPanelState.ARMED_NIGHT),
+            (
+                AlarmControlPanelCommand.ARM_VACATION,
+                AlarmControlPanelState.ARMED_VACATION,
+            ),
+            (
+                AlarmControlPanelCommand.ARM_CUSTOM_BYPASS,
+                AlarmControlPanelState.ARMED_CUSTOM_BYPASS,
+            ),
+            (AlarmControlPanelCommand.TRIGGER, AlarmControlPanelState.TRIGGERED),
+            (AlarmControlPanelCommand.DISARM, AlarmControlPanelState.DISARMED),
+        ):
+            client.alarm_control_panel_command(alarm.key, command)
+            await _wait_for(lambda state=state: alarm.state == state)
+
+        client.water_heater_command(
+            water_heater.key,
+            mode=WaterHeaterMode.ECO,
+            target_temperature=50.0,
+            target_temperature_low=45.0,
+            target_temperature_high=55.0,
+            away=True,
+            on=True,
+        )
+        expected_flags = WaterHeaterStateFlag.AWAY | WaterHeaterStateFlag.ON
+        await _wait_for(
+            lambda: water_heater.mode == WaterHeaterMode.ECO
+            and water_heater.target_temperature == 50.0
+            and water_heater.target_temperature_low == 45.0
+            and water_heater.target_temperature_high == 55.0
+            and water_heater.state == expected_flags
+        )
     finally:
         if client is not None:
             await client.disconnect()

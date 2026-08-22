@@ -9,7 +9,8 @@ import random
 import re
 import socket
 from inspect import getframeinfo, stack
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Callable
 
 from aioesphomeapi.api_pb2 import DeviceInfoResponse
 from aioesphomeapi.model import BluetoothProxyFeature
@@ -19,9 +20,11 @@ from zeroconf.asyncio import AsyncZeroconf
 from .basic_entity import BasicEntity
 from .device_capabilities import DeviceCapabilitiesResponse
 from .logger import format_log
+from .services import SupportsResponseType
 
 if TYPE_CHECKING:
     from .bluetooth_proxy import BluetoothProxy
+    from .services import ServiceArgType, UserService
     from .voice_assistant import VoiceAssistant
 
 logger = logging.getLogger(__name__)
@@ -113,6 +116,7 @@ class Device:
             encryption_key
         )
         self.entities: list[BasicEntity] = []
+        self.services: list[UserService] = []
         self.zeroconf: AsyncZeroconf | None = None
         self.service_info: ServiceInfo | None = None
         self.running = True
@@ -220,6 +224,30 @@ class Device:
             raise ValueError(f"Duplicate object_id: {entity.object_id}")
 
         self.entities.append(entity)
+
+    def add_service(
+        self,
+        name: str,
+        callback: Callable[..., Any],
+        *,
+        arguments: Mapping[str, ServiceArgType | type[Any]] | None = None,
+        supports_response: SupportsResponseType | str | int = SupportsResponseType.NONE,
+    ) -> UserService:
+        """Expose a Python callback as an ESPHome user-defined API action."""
+        from .services import UserService
+
+        service = UserService(
+            name,
+            callback,
+            arguments=arguments,
+            supports_response=supports_response,
+        )
+        if any(existing.name == service.name for existing in self.services):
+            raise ValueError(f"Duplicate service name: {service.name}")
+        if any(existing.key == service.key for existing in self.services):
+            raise ValueError(f"Service key collision: {service.name}")
+        self.services.append(service)
+        return service
 
     def get_entity(self, object_id: str) -> BasicEntity | None:
         for entity in self.entities:

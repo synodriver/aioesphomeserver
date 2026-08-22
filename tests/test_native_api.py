@@ -1,5 +1,7 @@
 import asyncio
 import base64
+import logging
+from unittest.mock import patch
 
 from aioesphomeapi import APIClient, APIVersion
 from aioesphomeapi.api_pb2 import HelloRequest, HelloResponse
@@ -236,3 +238,97 @@ def test_encryption_key_validation_and_device_info():
             pass
         else:
             raise AssertionError("invalid encryption key was accepted")
+
+
+def test_plaintext_server_rejects_noise_preamble_without_error_traceback(caplog):
+    asyncio.run(_test_plaintext_server_rejects_noise_preamble(caplog))
+
+
+async def _test_plaintext_server_rejects_noise_preamble(caplog):
+    device = Device(name="Plaintext")
+    api = NativeApiServer(name="_api", port=0, host="127.0.0.1")
+    device.add_entity(api)
+    task = asyncio.create_task(api.run())
+    writer = None
+    try:
+        while api.bound_port is None:
+            await asyncio.sleep(0)
+        caplog.set_level(logging.ERROR, logger="aioesphomeserver.native_api_server")
+        reader, writer = await asyncio.open_connection("127.0.0.1", api.bound_port)
+        writer.write(b"\x01")
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(1), timeout=1) == b""
+        assert not any(
+            record.getMessage() == "Native API connection failed"
+            for record in caplog.records
+        )
+    finally:
+        if writer is not None:
+            writer.close()
+            await writer.wait_closed()
+        await api.stop()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_plaintext_server_rejects_oversized_frames():
+    asyncio.run(_test_plaintext_server_rejects_oversized_frames())
+
+
+async def _test_plaintext_server_rejects_oversized_frames():
+    device = Device(name="Frame limit")
+    api = NativeApiServer(name="_api", port=0, host="127.0.0.1")
+    device.add_entity(api)
+    task = asyncio.create_task(api.run())
+    writer = None
+    try:
+        while api.bound_port is None:
+            await asyncio.sleep(0)
+        reader, writer = await asyncio.open_connection("127.0.0.1", api.bound_port)
+        writer.write(b"\0" + _varuint_to_bytes(65536) + b"\x01")
+        await writer.drain()
+        assert await asyncio.wait_for(reader.read(1), timeout=1) == b""
+    finally:
+        if writer is not None:
+            writer.close()
+            await writer.wait_closed()
+        await api.stop()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_native_api_limits_idle_and_concurrent_clients():
+    asyncio.run(_test_native_api_limits_idle_and_concurrent_clients())
+
+
+async def _test_native_api_limits_idle_and_concurrent_clients():
+    device = Device(name="Connection limits")
+    api = NativeApiServer(
+        name="_api", port=0, host="127.0.0.1", max_connections=1
+    )
+    device.add_entity(api)
+    task = asyncio.create_task(api.run())
+    first_writer = None
+    second_writer = None
+    try:
+        while api.bound_port is None:
+            await asyncio.sleep(0)
+        with patch("aioesphomeserver.native_api_server.CLIENT_HELLO_TIMEOUT", 0.01):
+            first_reader, first_writer = await asyncio.open_connection(
+                "127.0.0.1", api.bound_port
+            )
+            while len(api._clients) != 1:
+                await asyncio.sleep(0)
+            second_reader, second_writer = await asyncio.open_connection(
+                "127.0.0.1", api.bound_port
+            )
+            assert await asyncio.wait_for(second_reader.read(1), timeout=1) == b""
+            assert await asyncio.wait_for(first_reader.read(1), timeout=1) == b""
+    finally:
+        for writer in (first_writer, second_writer):
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+        await api.stop()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
