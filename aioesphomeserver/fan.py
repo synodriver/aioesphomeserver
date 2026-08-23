@@ -33,7 +33,8 @@ class FanEntity(_StateEntity):
             True,
             True,
         )
-        self.supported_speed_count, self.supported_preset_modes = 3, []
+        self.supported_speed_count = 3
+        self.supported_preset_modes: list[str] = []
 
     async def build_list_entities_response(self) -> ListEntitiesFanResponse:
         return ListEntitiesFanResponse(

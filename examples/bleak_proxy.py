@@ -80,7 +80,7 @@ class BleakBluetoothProxy(BluetoothProxy):
         active: bool,
         callback: Callable[[BLEDevice, AdvertisementData], None],
     ) -> BleakScanner:
-        bluez: dict[str, Any] = {}
+        bluez: Any = {}
         if self._bluez_adapter is not None:
             bluez["adapter"] = self._bluez_adapter
         if not active:
@@ -96,8 +96,8 @@ class BleakBluetoothProxy(BluetoothProxy):
             device: BLEDevice, advertisement_data: AdvertisementData
         ) -> None:
             address = bluetooth_address_to_int(device.address)
-            asyncio.create_task(
-                self.publish_advertisement(
+            async def publish_detection() -> None:
+                await self.publish_advertisement(
                     BluetoothAdvertisement(
                         address=address,
                         rssi=advertisement_data.rssi,
@@ -108,7 +108,8 @@ class BleakBluetoothProxy(BluetoothProxy):
                         manufacturer_data=dict(advertisement_data.manufacturer_data),
                     )
                 )
-            )
+
+            asyncio.create_task(publish_detection())
 
         scanner = self._scanner_for_mode(active, on_detection)
         self._scanner = scanner
@@ -144,7 +145,7 @@ class BleakBluetoothProxy(BluetoothProxy):
 
     async def connect(self, address: int, address_type: int, use_cache: bool) -> int:
         del address_type, use_cache
-        bluez = (
+        bluez: Any = (
             {"adapter": self._bluez_adapter} if self._bluez_adapter is not None else {}
         )
         client = BleakClient(bluetooth_address_to_str(address), bluez=bluez)
@@ -205,14 +206,20 @@ class BleakBluetoothProxy(BluetoothProxy):
     ) -> None:
         client = await self._client(address)
         if enable:
+            async def on_notification(_handle: Any, data: bytearray) -> None:
+                await callback(bytes(data))
+
             await client.start_notify(
-                handle, lambda _handle, data: asyncio.create_task(callback(bytes(data)))
+                handle,
+                lambda notification_handle, data: asyncio.create_task(
+                    on_notification(notification_handle, data)
+                ),
             )
         else:
             await client.stop_notify(handle)
 
 
-def _bleak_properties(properties: list[str]) -> int:
+def _bleak_properties(properties: Sequence[str]) -> int:
     """Map Bleak property names to ESPHome's bit field."""
     values = {
         "broadcast": 0x01,
@@ -306,6 +313,7 @@ def _feature_names(feature_flags: int) -> str:
         feature.name
         for feature in BluetoothProxyFeature
         if feature_flags & int(feature)
+        and feature.name is not None
     ]
     return ", ".join(names) if names else "none"
 

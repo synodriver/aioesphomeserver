@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from aioesphomeserver.basic_entity import BasicEntity
 
 
 class _StateEntity(BasicEntity):
+    async def get_state(self) -> Any:
+        return self._state
+
     async def _publish_state(self) -> None:
         await self.notify_state_change()
 

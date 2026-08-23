@@ -79,7 +79,7 @@ class NumberEntity(BasicEntity):
         """Handle a value requested by Home Assistant."""
         await self.set_state(value)
 
-    async def handle(self, key: str, message: object) -> None:
+    async def handle(self, key: str, message: Any) -> None:
         if type(message) is NumberCommandRequest and message.key == self.key:
             await self.on_command(message.state)
 

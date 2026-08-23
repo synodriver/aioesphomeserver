@@ -12,7 +12,7 @@ from inspect import getframeinfo, stack
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable
 
-from aioesphomeapi.api_pb2 import DeviceInfoResponse
+from aioesphomeapi.api_pb2 import DeviceInfoResponse, HomeassistantActionResponse
 from aioesphomeapi.model import BluetoothProxyFeature
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -260,6 +260,55 @@ class Device:
             return None
         return self.entities[key - 1]
 
+    def _get_native_api_server(self) -> Any:
+        from aioesphomeserver.native_api_server import NativeApiServer
+
+        for entity in self.entities:
+            if isinstance(entity, NativeApiServer):
+                return entity
+        raise RuntimeError("Native API server is not attached to this device")
+
+    async def call_homeassistant_service(
+        self,
+        service: str,
+        *,
+        data: Mapping[str, str] | None = None,
+        data_template: Mapping[str, str] | None = None,
+        variables: Mapping[str, str] | None = None,
+        wait_for_response: bool = False,
+        response_template: str | None = None,
+        timeout: float = 30.0,
+    ) -> HomeassistantActionResponse | None:
+        """Call a Home Assistant service through a subscribed Native API client."""
+        api_server = self._get_native_api_server()
+        return await api_server.send_homeassistant_action(
+            service,
+            data=data,
+            data_template=data_template,
+            variables=variables,
+            wait_for_response=wait_for_response,
+            response_template=response_template,
+            timeout=timeout,
+        )
+
+    async def fire_homeassistant_event(
+        self,
+        event: str,
+        *,
+        data: Mapping[str, str] | None = None,
+        data_template: Mapping[str, str] | None = None,
+        variables: Mapping[str, str] | None = None,
+    ) -> None:
+        """Fire an event in Home Assistant through a subscribed API client."""
+        api_server = self._get_native_api_server()
+        await api_server.send_homeassistant_action(
+            event,
+            data=data,
+            data_template=data_template,
+            variables=variables,
+            is_event=True,
+        )
+
     async def run(self, api_port: int = 6053, web_port: int | None = 8080) -> None:
         from aioesphomeserver import NativeApiServer, WebServer
 
@@ -279,8 +328,11 @@ class Device:
                             tg.create_task(entity.run())
 
                     await api_server.wait_started()
-                    self.api_port = api_server.bound_port
-                    self.zeroconf = await self.register_zeroconf(self.api_port)
+                    bound_port = api_server.bound_port
+                    if bound_port is None:
+                        raise RuntimeError("Native API server did not bind a port")
+                    self.api_port = bound_port
+                    self.zeroconf = await self.register_zeroconf(bound_port)
                     tg.create_task(self.heartbeat())
 
             except ConnectionResetError:

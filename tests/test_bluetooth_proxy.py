@@ -139,6 +139,7 @@ async def _test_official_client_can_register_bluetooth_scanner() -> None:
         client = APIClient("127.0.0.1", api.bound_port, keepalive=60)
         await client.connect()
         info = await client.device_info()
+        assert client.api_version is not None
         assert info.bluetooth_mac_address == "02:00:00:00:20:02"
         assert info.bluetooth_proxy_feature_flags_compat(client.api_version) == (
             proxy.feature_flags
@@ -267,10 +268,14 @@ def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
         ]
         assert len(text_sensors) == 1
         ip_sensor = text_sensors[0]
+        assert ip_sensor is not None
         assert ip_sensor.object_id == "ip_address"
         assert ip_sensor.name == "IP address"
 
-        state = await device.get_entity("ip_address").build_state_response()
+        ip_entity = device.get_entity("ip_address")
+        assert ip_entity is not None
+        state = await ip_entity.build_state_response()
+        assert state is not None
         assert state.state
         assert state.key == ip_sensor.key
 

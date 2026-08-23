@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
     from google.protobuf.message import Message
 
+    from aioesphomeserver.device import Device
     from aioesphomeserver.native_api_server import NativeApiConnection
 
 
@@ -156,7 +157,7 @@ class VoiceAssistant:
 
         self.feature_flags = int(features)
         self.legacy_version = 2 if speaker else 1
-        self.device = None
+        self.device: Device | None = None
         self._output_only = output_only
         self._multi_channel_audio = multi_channel_audio
         self._client: NativeApiConnection | None = None
@@ -365,7 +366,7 @@ class VoiceAssistant:
         elif type(message) is VoiceAssistantTimerEventResponse:
             if client is self._client:
                 try:
-                    event_type = VoiceAssistantTimerEventType(message.event_type)
+                    timer_event_type = VoiceAssistantTimerEventType(message.event_type)
                 except ValueError:
                     logger.warning(
                         "Ignoring unknown voice assistant timer event type %s",
@@ -374,7 +375,7 @@ class VoiceAssistant:
                 else:
                     await self.on_timer(
                         VoiceAssistantTimer(
-                            event_type=event_type,
+                            event_type=timer_event_type,
                             timer_id=message.timer_id,
                             name=message.name,
                             total_seconds=message.total_seconds,

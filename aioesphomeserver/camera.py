@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
-from aioesphomeapi.api_pb2 import CameraImageRequest, CameraImageResponse, ListEntitiesCameraResponse
+from aioesphomeapi.api_pb2 import (
+    CameraImageRequest,
+    CameraImageResponse,
+    ListEntitiesCameraResponse,
+)
 from aioesphomeserver.basic_entity import BasicEntity
 
 CAMERA_IMAGE_CHUNK_SIZE = 1390
@@ -35,7 +39,10 @@ class CameraEntity(BasicEntity):
         for offset in range(0, max(len(data), 1), CAMERA_IMAGE_CHUNK_SIZE):
             chunk = data[offset : offset + CAMERA_IMAGE_CHUNK_SIZE]
             is_last = offset + len(chunk) >= len(data)
-            await self.device.publish(
+            device = self.device
+            if device is None:
+                raise RuntimeError("entity is not attached to a device")
+            await device.publish(
                 self,
                 "state_change",
                 CameraImageResponse(

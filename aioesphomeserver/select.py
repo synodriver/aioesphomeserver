@@ -77,6 +77,6 @@ class SelectEntity(BasicEntity):
         """Handle an option requested by Home Assistant."""
         await self.set_state(value)
 
-    async def handle(self, key: str, message: object) -> None:
+    async def handle(self, key: str, message: Any) -> None:
         if type(message) is SelectCommandRequest and message.key == self.key:
             await self.on_command(message.state)

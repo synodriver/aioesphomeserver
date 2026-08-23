@@ -169,7 +169,7 @@ _This is alpha quality at best._ Expect bugs, both striking and subtle. Use at y
 general-purpose host, network isolation or a VPN such as WireGuard/Tailscale can
 still provide useful defense in depth.
 
-See [API.md](API.md) for Native API, custom services, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, and `examples/voice_assistant.py`.
+See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/homeassistant_actions.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, and `examples/voice_assistant.py`.
 
 The Bleak proxy example advertises runtime scanning-mode support. On Linux it
 passes BlueZ `or_patterns` for passive scanning and falls back to active
@@ -193,20 +193,20 @@ In rough priority order:
 
 * [x] Finish Light web API
 * [ ] Configurable ports and listening IPs
-* [ ] Button
+* [x] Button
 * [x] Sensor
-* [ ] Cover
-* [ ] Zeroconf
-* [ ] Fan
+* [x] Cover
+* [x] Zeroconf
+* [x] Fan
 * [x] Device-defined services
-* [ ] Call HA defined services
-* [ ] Event
-* [ ] TextSensor
-* [ ] Number
-* [ ] Select
-* [ ] Date & Time & DateTime
-* [ ] Valve
-* [ ] MediaPlayer
-* [ ] Siren
-* [ ] Alarm control panel
+* [x] Call HA defined services
+* [x] Event
+* [x] TextSensor
+* [x] Number
+* [x] Select
+* [x] Date & Time & DateTime
+* [x] Valve
+* [x] MediaPlayer
+* [x] Siren
+* [x] Alarm control panel
 * [x] Camera

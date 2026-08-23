@@ -110,7 +110,7 @@ try:
     DeviceCapabilitiesResponse = api_pb2.DeviceCapabilitiesResponse
 except AttributeError:
 
-    class DeviceCapabilitiesRequest:
+    class DeviceCapabilitiesRequest:  # type: ignore[no-redef]
         """Fallback for aioesphomeapi versions without API 1.15 capabilities."""
 
         def SerializeToString(self) -> bytes:
@@ -120,7 +120,7 @@ except AttributeError:
             return 0
 
     @dataclass(slots=True)
-    class DeviceCapabilitiesResponse:
+    class DeviceCapabilitiesResponse:  # type: ignore[no-redef]
         """Fallback protobuf-compatible DeviceCapabilitiesResponse."""
 
         bluetooth_proxy: _BluetoothProxyCapabilities = field(

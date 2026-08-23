@@ -92,7 +92,7 @@ class SwitchEntity(BasicEntity):
         """Handle a state requested by Home Assistant."""
         await self.set_state(value)
 
-    async def handle(self, key: str, message: object) -> None:
+    async def handle(self, key: str, message: Any) -> None:
         if type(message) == SwitchCommandRequest:
             if message.key == self.key:
                 await self.on_command(message.state)

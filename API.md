@@ -162,6 +162,53 @@ device.add_service(
 完整示例见 `examples/custom_services.py`，官方客户端调用方式是
 `await client.execute_service(service, {"value": "hello"}, return_response=True)`。
 
+## 调用 Home Assistant 服务
+
+ESPHome `api:` 下的 `homeassistant_services: true` 对应本库的
+`Device.call_homeassistant_service()` 和 `Device.fire_homeassistant_event()`。Home Assistant
+客户端连接后需要先发送 `SubscribeHomeassistantServicesRequest`；官方客户端可调用
+`client.subscribe_service_calls(callback)` 完成订阅。订阅后，设备可以调用 HASS 服务或触发事件：
+
+```python
+await device.call_homeassistant_service(
+    "light.turn_on",
+    data={"entity_id": "light.living_room", "brightness": "127"},
+    data_template={"transition": "{{ transition_seconds }}"},
+    variables={"transition_seconds": "2"},
+)
+
+await device.fire_homeassistant_event(
+    "esphome.aioesphomeserver_button_pressed",
+    data={"source": "front_button"},
+)
+```
+
+Home Assistant 只接受 `esphome.*` 域下的设备事件；其他域名会被 ESPHome 集成记录为错误并丢弃。
+因此自定义事件名应使用 `esphome.` 前缀，例如 `esphome.aioesphomeserver_button_pressed`。
+
+`data`、`data_template` 和 `variables` 对应 ESPHome Native API 的三个
+`HomeassistantServiceMap` 列表，键和值都必须是字符串。一次调用会发送给所有已订阅的客户端；没有
+订阅者时，无响应调用会记录警告并丢弃，等待响应的调用会抛出 `RuntimeError`。
+
+需要 Home Assistant 返回结果时设置 `wait_for_response=True`。方法会等待
+`HomeassistantActionResponse` 并返回官方 protobuf 对象；`response_template` 会原样发送给 Home
+Assistant，等待默认超时为 30 秒，可通过 `timeout` 调整：
+
+```python
+response = await device.call_homeassistant_service(
+    "conversation.process",
+    data={"text": "What time is it?"},
+    wait_for_response=True,
+    response_template="{{ response }}",
+)
+if response is not None and response.success:
+    print(response.response_data)
+```
+
+完整示例见 `examples/homeassistant_actions.py`。它使用 Button 回调调用
+`persistent_notification.create`，并定时触发一个 Home Assistant 事件。该能力是设备主动向 HASS
+发送请求，与 `Device.add_service()` 注册由 HASS 调用的设备服务方向相反。
+
 ## 蓝牙代理
 
 `BluetoothProxy` 只定义异步后端接口，不直接依赖蓝牙库。应用继承它并实现扫描、连接、GATT 读写及通知方法；基类负责把后端结果打包成 ESPHome protobuf。

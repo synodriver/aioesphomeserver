@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
-from aioesphomeapi.api_pb2 import InfraredRFReceiveEvent, InfraredRFTransmitRawTimingsRequest, ListEntitiesInfraredResponse
+from aioesphomeapi.api_pb2 import (
+    InfraredRFReceiveEvent,
+    InfraredRFTransmitRawTimingsRequest,
+    ListEntitiesInfraredResponse,
+)
 from aioesphomeserver.basic_entity import BasicEntity
 
 __all__ = ["InfraredEntity"]
@@ -64,6 +68,9 @@ class InfraredEntity(BasicEntity):
             )
 
     async def publish_receive(self, timings: Sequence[int]) -> None:
-        await self.device.publish(
+        device = self.device
+        if device is None:
+            raise RuntimeError("entity is not attached to a device")
+        await device.publish(
             self, "state_change", InfraredRFReceiveEvent(key=self.key, timings=timings)
         )

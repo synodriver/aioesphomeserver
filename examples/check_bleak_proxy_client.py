@@ -23,6 +23,7 @@ def _feature_names(feature_flags: int) -> str:
         feature.name
         for feature in BluetoothProxyFeature
         if feature_flags & int(feature)
+        and feature.name is not None
     ]
     return ", ".join(names) if names else "none"
 
@@ -36,7 +37,11 @@ async def _check(host: str, port: int) -> int:
                 await client.device_info_and_list_entities()
             )
         api_version = client.api_version
-        feature_flags = device_info.bluetooth_proxy_feature_flags_compat(api_version)
+        if api_version is None:
+            raise RuntimeError("API client did not negotiate a version")
+        feature_flags = device_info.bluetooth_proxy_feature_flags_compat(
+            api_version
+        )
 
         print(f"API version: {api_version}")
         print(f"Device name: {device_info.name}")

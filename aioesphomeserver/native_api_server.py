@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from aioesphomeapi.api_pb2 import AuthenticationRequest  # type: ignore
@@ -14,6 +15,8 @@ from aioesphomeapi.api_pb2 import GetTimeRequest  # type: ignore
 from aioesphomeapi.api_pb2 import GetTimeResponse  # type: ignore
 from aioesphomeapi.api_pb2 import HelloRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HelloResponse  # type: ignore
+from aioesphomeapi.api_pb2 import HomeassistantActionRequest  # type: ignore
+from aioesphomeapi.api_pb2 import HomeassistantActionResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesDoneResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ExecuteServiceRequest  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesRequest  # type: ignore
@@ -36,6 +39,7 @@ if TYPE_CHECKING:
 
     from google.protobuf.message import Message
 
+    from aioesphomeserver.device import Device
 
 API_VERSION_MAJOR = 1
 API_VERSION_MINOR = 15
@@ -45,6 +49,7 @@ MAX_MESSAGE_SIZE = 65535
 MAX_NOISE_FRAME_SIZE = 65535
 NOISE_HANDSHAKE_TIMEOUT = 10
 CLIENT_HELLO_TIMEOUT = 60
+HOMEASSISTANT_ACTION_TIMEOUT = 30.0
 DEFAULT_MAX_CONNECTIONS = 6
 NOISE_PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
 NOISE_PROLOGUE = b"NoiseAPIInit"
@@ -86,6 +91,7 @@ class NativeApiConnection:
         self.writer = writer
         self.subscribe_to_logs = False
         self.subscribe_to_states = False
+        self.subscribe_to_homeassistant_services = False
         self.running = True
         self._write_lock = asyncio.Lock()
         self._noise: NoiseConnection | None = None
@@ -93,10 +99,11 @@ class NativeApiConnection:
 
     async def start(self) -> None:
         try:
-            if self.server.device.encryption_key_bytes is not None:
+            device = self.server.attached_device
+            if device.encryption_key_bytes is not None:
                 async with asyncio.timeout(NOISE_HANDSHAKE_TIMEOUT):
                     await self._perform_noise_handshake(
-                        self.server.device.encryption_key_bytes
+                        device.encryption_key_bytes
                     )
             first_message = True
             while self.running:
@@ -133,7 +140,7 @@ class NativeApiConnection:
                     api_version_major=API_VERSION_MAJOR,
                     api_version_minor=API_VERSION_MINOR,
                     server_info="aioesphomeserver",
-                    name=self.server.device.name,
+                    name=self.server.attached_device.name,
                 )
             )
         elif type(message) is AuthenticationRequest:
@@ -156,6 +163,8 @@ class NativeApiConnection:
             task = asyncio.create_task(self.server.execute_service(self, message))
             self._service_tasks.add(task)
             task.add_done_callback(self._service_tasks.discard)
+        elif type(message) is HomeassistantActionResponse:
+            self.server.handle_homeassistant_action_response(message)
         else:
             await self.server.handle_client_request(self, message)
 
@@ -238,9 +247,9 @@ class NativeApiConnection:
         server_hello = b"".join(
             (
                 b"\x01",
-                self.server.device.name.encode("utf-8"),
+                self.server.attached_device.name.encode("utf-8"),
                 b"\0",
-                self.server.device.mac_address.replace(":", "").lower().encode("ascii"),
+                self.server.attached_device.mac_address.replace(":", "").lower().encode("ascii"),
                 b"\0",
             )
         )
@@ -315,7 +324,7 @@ class NativeApiConnection:
                 return result
         raise NativeApiProtocolError("invalid native API varuint")
 
-    async def stop(self) -> None:
+    async def stop(self, *, wait_closed: bool = True) -> None:
         if not self.running and self.writer.is_closing():
             return
         self.running = False
@@ -329,6 +338,8 @@ class NativeApiConnection:
             self._service_tasks.clear()
         if not self.writer.is_closing():
             self.writer.close()
+            if not wait_closed:
+                return
             try:
                 await self.writer.wait_closed()
             except (ConnectionResetError, BrokenPipeError):
@@ -354,17 +365,33 @@ class NativeApiServer(BasicEntity):
         self.max_connections = max_connections
         self.bound_port: int | None = None
         self._clients: set[NativeApiConnection] = set()
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._next_homeassistant_call_id = 1
+        self._homeassistant_action_futures: dict[
+            int, asyncio.Future[HomeassistantActionResponse]
+        ] = {}
+        self._homeassistant_action_clients: dict[
+            int, set[NativeApiConnection]
+        ] = {}
         self.server: asyncio.Server | None = None
         self._started = asyncio.Event()
+
+    @property
+    def attached_device(self) -> Device:
+        if self.device is None:
+            raise RuntimeError("Native API server is not attached to a device")
+        return self.device
 
     async def run(self) -> None:
         self.server = await asyncio.start_server(
             self.handle_client, self.host, self.port
         )
-        sockets = self.server.sockets or []
+        sockets: Any = self.server.sockets or []
         self.bound_port = sockets[0].getsockname()[1] if sockets else self.port
         self._started.set()
-        await self.device.log(2, "api", f"Starting on {self.host}:{self.bound_port}")
+        await self.attached_device.log(
+            2, "api", f"Starting on {self.host}:{self.bound_port}"
+        )
         async with self.server:
             await self.server.serve_forever()
 
@@ -387,69 +414,207 @@ class NativeApiServer(BasicEntity):
             return
         connection = NativeApiConnection(self, reader, writer)
         self._clients.add(connection)
+        task = asyncio.current_task()
+        if task is not None:
+            self._client_tasks.add(task)
         try:
             await connection.start()
         finally:
+            self._remove_homeassistant_action_client(connection)
             self._clients.discard(connection)
-            bluetooth_proxy = self.device.bluetooth_proxy
+            bluetooth_proxy = self.attached_device.bluetooth_proxy
             if bluetooth_proxy is not None:
                 await bluetooth_proxy.on_api_client_disconnected(connection)
-            voice_assistant = self.device.voice_assistant
+            voice_assistant = self.attached_device.voice_assistant
             if voice_assistant is not None:
                 await voice_assistant.on_api_client_disconnected(connection)
+            if task is not None:
+                self._client_tasks.discard(task)
 
     async def handle_client_request(
         self, client: NativeApiConnection, message: "Message"
     ) -> None:
-        if type(message) in (
-            SubscribeHomeassistantServicesRequest,
-            SubscribeHomeAssistantStatesRequest,
-        ):
+        if type(message) is SubscribeHomeassistantServicesRequest:
+            client.subscribe_to_homeassistant_services = True
+            return
+        if type(message) is SubscribeHomeAssistantStatesRequest:
             return
         if type(message) is ListEntitiesRequest:
             await self.handle_list_entities(client)
             return
         if type(message) is DeviceInfoRequest:
-            await client.write_message(await self.device.build_device_info_response())
+            await client.write_message(
+                await self.attached_device.build_device_info_response()
+            )
             return
         if type(message) is DeviceCapabilitiesRequest:
             await client.write_message(
-                await self.device.build_device_capabilities_response()
+                await self.attached_device.build_device_capabilities_response()
             )
             return
 
-        bluetooth_proxy = self.device.bluetooth_proxy
+        bluetooth_proxy = self.attached_device.bluetooth_proxy
         if bluetooth_proxy is not None and await bluetooth_proxy.handle_api_message(
             client, message
         ):
             return
-        voice_assistant = self.device.voice_assistant
+        voice_assistant = self.attached_device.voice_assistant
         if voice_assistant is not None and await voice_assistant.handle_api_message(
             client, message
         ):
             return
-        await self.device.publish(self, "client_request", message)
+        await self.attached_device.publish(self, "client_request", message)
+
+    async def send_homeassistant_action(
+        self,
+        service: str,
+        *,
+        data: Mapping[str, str] | None = None,
+        data_template: Mapping[str, str] | None = None,
+        variables: Mapping[str, str] | None = None,
+        is_event: bool = False,
+        wait_for_response: bool = False,
+        response_template: str | None = None,
+        timeout: float = HOMEASSISTANT_ACTION_TIMEOUT,
+    ) -> HomeassistantActionResponse | None:
+        """Send a Home Assistant service call or event to subscribed clients."""
+        if not service:
+            raise ValueError("Home Assistant service name cannot be empty")
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        if response_template is not None and not wait_for_response:
+            raise ValueError("response_template requires wait_for_response=True")
+        for values in (data, data_template, variables):
+            if values is not None and not isinstance(values, Mapping):
+                raise TypeError("Home Assistant action maps must be mappings")
+            for key, value in (values or {}).items():
+                if not isinstance(key, str) or not isinstance(value, str):
+                    raise TypeError(
+                        "Home Assistant action maps require string keys and values"
+                    )
+
+        subscribers = tuple(
+            client
+            for client in self._clients
+            if client.subscribe_to_homeassistant_services and client.running
+        )
+        if not subscribers:
+            if wait_for_response:
+                raise RuntimeError(
+                    "Home Assistant has not subscribed to service calls"
+                )
+            logger.warning(
+                "Dropping Home Assistant %s %r: no subscribed client",
+                "event" if is_event else "service call",
+                service,
+            )
+            return None
+
+        request = HomeassistantActionRequest(
+            service=service,
+            is_event=is_event,
+            wants_response=wait_for_response,
+            response_template=response_template or "",
+        )
+        for field, values in (
+            (request.data, data),
+            (request.data_template, data_template),
+            (request.variables, variables),
+        ):
+            for key, value in (values or {}).items():
+                entry = field.add()
+                entry.key = key
+                entry.value = value
+
+        future: asyncio.Future[HomeassistantActionResponse] | None = None
+        if wait_for_response:
+            call_id = self._next_homeassistant_call_id
+            self._next_homeassistant_call_id = (
+                self._next_homeassistant_call_id + 1
+            ) & 0xFFFFFFFF
+            if self._next_homeassistant_call_id == 0:
+                self._next_homeassistant_call_id = 1
+            request.call_id = call_id
+            future = asyncio.get_running_loop().create_future()
+            self._homeassistant_action_futures[call_id] = future
+            self._homeassistant_action_clients[call_id] = set(subscribers)
+
+        try:
+            sent = 0
+            for client in subscribers:
+                try:
+                    await client.write_message(request)
+                except (ConnectionError, OSError, NativeApiProtocolError) as err:
+                    logger.debug(
+                        "Home Assistant action %r could not be sent to a client: %s",
+                        service,
+                        err,
+                    )
+                    self._remove_homeassistant_action_client(client)
+                else:
+                    sent += 1
+            if sent == 0:
+                if future is not None:
+                    raise RuntimeError(
+                        "Home Assistant action could not be sent to any subscriber"
+                    )
+                return None
+            if future is None:
+                return None
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise TimeoutError(
+                f"Home Assistant action {service!r} timed out after {timeout:g}s"
+            ) from None
+        finally:
+            if future is not None:
+                self._homeassistant_action_futures.pop(request.call_id, None)
+                self._homeassistant_action_clients.pop(request.call_id, None)
+
+    def handle_homeassistant_action_response(
+        self, response: HomeassistantActionResponse
+    ) -> None:
+        future = self._homeassistant_action_futures.get(response.call_id)
+        if future is not None and not future.done():
+            future.set_result(response)
+
+    def _remove_homeassistant_action_client(self, client: NativeApiConnection) -> None:
+        """Remove a disconnected client from pending Home Assistant calls."""
+        for call_id, clients in tuple(self._homeassistant_action_clients.items()):
+            clients.discard(client)
+            if clients:
+                continue
+            future = self._homeassistant_action_futures.get(call_id)
+            if future is not None and not future.done():
+                future.set_exception(
+                    RuntimeError("all Home Assistant action subscribers disconnected")
+                )
+
+    def _fail_homeassistant_actions(self, reason: str) -> None:
+        for future in tuple(self._homeassistant_action_futures.values()):
+            if not future.done():
+                future.set_exception(RuntimeError(reason))
 
     async def handle_list_entities(self, client: NativeApiConnection) -> None:
-        for entity in self.device.entities:
+        for entity in self.attached_device.entities:
             message = await entity.build_list_entities_response()
             if message is not None:
                 await client.write_message(message)
-        for service in self.device.services:
+        for service in self.attached_device.services:
             await client.write_message(service.list_entities_response())
         await client.write_message(ListEntitiesDoneResponse())
 
     async def execute_service(
         self, client: NativeApiConnection, message: ExecuteServiceRequest
     ) -> None:
-        for service in self.device.services:
+        for service in self.attached_device.services:
             if message.key == service.key:
                 await service.execute(message, client)
                 return
         logger.warning("Ignoring unknown user service key %s", message.key)
 
     async def send_all_states(self, client: NativeApiConnection) -> None:
-        for entity in self.device.entities:
+        for entity in self.attached_device.entities:
             message = await entity.build_state_response()
             if message is not None:
                 await client.write_message(message)
@@ -466,15 +631,29 @@ class NativeApiServer(BasicEntity):
                     await client.log(level, text)
 
     async def stop(self) -> None:
+        self._fail_homeassistant_actions("Native API server stopped")
         if self.server is not None:
             self.server.close()
-            await self.server.wait_closed()
             self.server = None
         self.bound_port = None
         self._started.clear()
-        if self._clients:
-            await asyncio.gather(*(client.stop() for client in tuple(self._clients)))
-            self._clients.clear()
+        clients = tuple(self._clients)
+        tasks = tuple(
+            task
+            for task in self._client_tasks
+            if task is not asyncio.current_task()
+        )
+        if clients:
+            await asyncio.gather(
+                *(client.stop(wait_closed=False) for client in clients),
+                return_exceptions=True,
+            )
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._clients.clear()
+        self._client_tasks.clear()
 
     async def restart(self) -> None:
         await self.stop()

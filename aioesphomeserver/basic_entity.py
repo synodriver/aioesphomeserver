@@ -36,7 +36,8 @@ class BasicEntity:
         self.device: Device | None = None
         self.key: int | None = None
 
-        self._state = False
+        # Concrete domains use bool, float, str, or protocol-specific state.
+        self._state: Any = False
 
     def set_device(self, device: Device) -> None:
         self.device = device

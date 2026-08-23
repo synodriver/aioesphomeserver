@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from zeroconf import ServiceBrowser, ServiceInfo, Zeroconf
 
 
@@ -32,7 +34,9 @@ class MyListener:
 if __name__ == "__main__":
     zeroconf = Zeroconf()
     listener = MyListener()
-    browser = ServiceBrowser(zeroconf, "_esphomelib._tcp.local.", listener)
+    browser = ServiceBrowser(
+        zeroconf, "_esphomelib._tcp.local.", cast(Any, listener)
+    )
 
     try:
         input("Press enter to exit...\n\n")

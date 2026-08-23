@@ -28,7 +28,10 @@ class EventEntity(BasicEntity):
         )
 
     async def trigger(self, event_type: str) -> None:
-        await self.device.publish(
+        device = self.device
+        if device is None:
+            raise RuntimeError("entity is not attached to a device")
+        await device.publish(
             self,
             "state_change",
             EventResponse(key=self.key, event_type=str(event_type)),

@@ -2,6 +2,7 @@ import ast
 import asyncio
 import json
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from aioesphomeserver import (
     Device,
     EntityListener,
     LightEntity,
+    NativeApiServer,
     SensorEntity,
     WebServer,
 )
@@ -33,6 +35,7 @@ def test_device_entity_management_and_publish():
         device.add_entity(listener)
 
         assert device.get_entity("temperature") is sensor
+        assert sensor.key is not None
         assert device.get_entity_by_key(sensor.key) is sensor
         assert device.get_entity_by_key(0) is None
         await device.publish(sensor, "custom", {"value": 1})
@@ -172,7 +175,7 @@ def test_device_run_starts_api_before_announcing():
 
             async def register_zeroconf(self, port: int) -> None:
                 api = self.get_entity("_server")
-                assert api is not None
+                assert isinstance(api, NativeApiServer)
                 assert api.bound_port == port
                 self.announced.set()
                 return None
@@ -183,6 +186,7 @@ def test_device_run_starts_api_before_announcing():
         try:
             await asyncio.wait_for(device.announced.wait(), timeout=2)
             assert device.web_port is None
+            assert device.api_port is not None
             client = APIClient(
                 "127.0.0.1",
                 device.api_port,
@@ -203,7 +207,10 @@ def test_binary_sensor_and_entity_listener_flow():
     async def run() -> None:
         class SwitchToBinary(EntityListener):
             async def handle(self, key: str, message: object) -> None:
-                binary = self.device.get_entity("door")
+                device = self.device
+                assert device is not None
+                binary = device.get_entity("door")
+                assert isinstance(binary, BinarySensorEntity)
                 await binary.set_state(bool(getattr(message, "state", False)))
 
         device = Device(name="Listener device", mac_address="02:00:00:00:00:14")
@@ -232,7 +239,8 @@ def test_light_http_style_commands_update_state_json():
         )
         device = Device(name="Light device", mac_address="02:00:00:00:00:11")
         device.add_entity(light)
-        light.notify_state_change = AsyncMock()
+        notify_state_change = AsyncMock()
+        cast(Any, light).notify_state_change = notify_state_change
 
         await light.set_state_from_query(
             True,
@@ -254,12 +262,13 @@ def test_light_http_style_commands_update_state_json():
             "g": pytest.approx(64 / 255),
             "b": pytest.approx(32 / 255),
         }
-        light.notify_state_change.assert_awaited_once()
+        notify_state_change.assert_awaited_once()
 
         response = await light.route_turn_off(
             make_mocked_request("POST", "/light/desk_light/turn_off?brightness=255")
         )
         assert response.status == 200
+        assert response.text is not None
         assert json.loads(response.text)["state"] == "OFF"
 
     asyncio.run(run())
@@ -277,18 +286,20 @@ def test_climate_http_style_command_and_state_json():
         )
         device = Device(name="Climate device", mac_address="02:00:00:00:00:12")
         device.add_entity(climate)
-        climate.notify_state_change = AsyncMock()
+        notify_state_change = AsyncMock()
+        cast(Any, climate).notify_state_change = notify_state_change
 
         await climate.set_state_from_query(mode="heat", target_temperature=22)
         state = json.loads(await climate.state_json())
         assert state["mode"] == "HEAT"
         assert state["target_temperature"] == 22
-        climate.notify_state_change.assert_awaited_once()
+        notify_state_change.assert_awaited_once()
 
         request = AsyncMock()
         request.json.return_value = {"mode": "off"}
         response = await climate.route_set_mode(request)
         assert response.status == 200
+        assert response.text is not None
         assert json.loads(response.text)["mode"] == "OFF"
 
     asyncio.run(run())

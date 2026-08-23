@@ -154,10 +154,12 @@ class BluetoothProxy:
         )
         self._scan_mode = self._configured_scan_mode
         self._scanner_running = False
-        self._advertisement_clients: dict[object, int] = {}
-        self._connections_clients: set[object] = set()
-        self._connection_owners: dict[int, object] = {}
-        self._notification_owners: dict[tuple[int, int], object] = {}
+        self._advertisement_clients: dict[NativeApiConnection, int] = {}
+        self._connections_clients: set[NativeApiConnection] = set()
+        self._connection_owners: dict[int, NativeApiConnection] = {}
+        self._notification_owners: dict[
+            tuple[int, int], NativeApiConnection
+        ] = {}
 
     # Backend interface -------------------------------------------------
     async def start_scan(self, active: bool) -> None:
@@ -229,7 +231,7 @@ class BluetoothProxy:
     async def handle_api_message(
         self, client: NativeApiConnection, message: Message
     ) -> bool:
-        handlers = {
+        handlers: dict[type[Message], Callable[..., Awaitable[None]]] = {
             SubscribeBluetoothLEAdvertisementsRequest: self._subscribe_advertisements,
             UnsubscribeBluetoothLEAdvertisementsRequest: self._unsubscribe_advertisements,
             SubscribeBluetoothConnectionsFreeRequest: self._subscribe_connections_free,
@@ -458,18 +460,18 @@ class BluetoothProxy:
             return
 
         if request_type == BluetoothDeviceRequestType.DISCONNECT:
-            error = 0
+            disconnect_error = 0
             try:
                 await self.disconnect(message.address)
             except BluetoothProxyError as exc:
-                error = exc.error
+                disconnect_error = exc.error
             except Exception:
                 logger.exception("Bluetooth disconnect failed")
-                error = GATT_ERROR
+                disconnect_error = GATT_ERROR
             self._connection_owners.pop(message.address, None)
             await client.write_message(
                 BluetoothDeviceConnectionResponse(
-                    address=message.address, connected=False, error=error
+                    address=message.address, connected=False, error=disconnect_error
                 )
             )
             await self._send_connections_free()
@@ -478,37 +480,37 @@ class BluetoothProxy:
         if request_type == BluetoothDeviceRequestType.PAIR:
             try:
                 paired = await self.pair(message.address)
-                error = 0
+                pairing_error = 0
             except BluetoothProxyError as exc:
-                paired, error = False, exc.error
+                paired, pairing_error = False, exc.error
             except Exception:
                 logger.exception("Bluetooth pairing failed")
-                paired, error = False, GATT_ERROR
+                paired, pairing_error = False, GATT_ERROR
             await client.write_message(
                 BluetoothDevicePairingResponse(
-                    address=message.address, paired=paired, error=error
+                    address=message.address, paired=paired, error=pairing_error
                 )
             )
             return
 
         if request_type == BluetoothDeviceRequestType.UNPAIR:
-            success, error = await self._run_simple_operation(
+            success, unpair_error = await self._run_simple_operation(
                 self.unpair, message.address
             )
             await client.write_message(
                 BluetoothDeviceUnpairingResponse(
-                    address=message.address, success=success, error=error
+                    address=message.address, success=success, error=unpair_error
                 )
             )
             return
 
         if request_type == BluetoothDeviceRequestType.CLEAR_CACHE:
-            success, error = await self._run_simple_operation(
+            success, cache_error = await self._run_simple_operation(
                 self.clear_cache, message.address
             )
             await client.write_message(
                 BluetoothDeviceClearCacheResponse(
-                    address=message.address, success=success, error=error
+                    address=message.address, success=success, error=cache_error
                 )
             )
             return

@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, cast
 from unittest.mock import patch
 
 from aioesphomeapi.api_pb2 import CameraImageResponse
@@ -9,7 +10,7 @@ from examples.camera import DEMO_JPEG, ExampleCamera
 
 class _FakeDevice:
     def __init__(self) -> None:
-        self.messages = []
+        self.messages: list[Any] = []
 
     async def publish(self, _publisher, _key, message) -> None:
         self.messages.append(message)
@@ -19,7 +20,7 @@ def test_camera_example_returns_a_snapshot():
     async def run() -> None:
         device = _FakeDevice()
         camera = ExampleCamera()
-        camera.device = device
+        camera.device = cast(Any, device)
         camera.key = 7
 
         await camera.on_request(single=True, stream=False)
@@ -38,7 +39,7 @@ def test_camera_example_stops_stream_task():
     async def run() -> None:
         device = _FakeDevice()
         camera = ExampleCamera()
-        camera.device = device
+        camera.device = cast(Any, device)
         camera.key = 8
 
         await camera.on_request(single=False, stream=True)
@@ -55,7 +56,7 @@ def test_camera_images_are_split_into_esphome_sized_chunks():
     async def run() -> None:
         device = _FakeDevice()
         camera = CameraEntity(name="Camera")
-        camera.device = device
+        camera.device = cast(Any, device)
         camera.key = 9
         image = bytes(range(256)) * 12
 
@@ -72,7 +73,7 @@ def test_camera_example_stream_stops_after_esphome_timeout():
     async def run() -> None:
         device = _FakeDevice()
         camera = ExampleCamera()
-        camera.device = device
+        camera.device = cast(Any, device)
         camera.key = 10
 
         with patch("examples.camera.CAMERA_STREAM_DURATION", 0.01):

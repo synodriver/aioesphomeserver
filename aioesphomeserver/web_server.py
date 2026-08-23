@@ -21,8 +21,13 @@ class WebServer(BasicEntity):
 
     async def handle(self, key: str, message: Any) -> None:
         if key == "state_change":
-            key = message.key
-            entity = self.device.get_entity_by_key(key)
+            entity_key = message.key
+            device = self.device
+            if device is None:
+                raise RuntimeError("web server is not attached to a device")
+            entity = device.get_entity_by_key(entity_key)
+            if entity is None:
+                return
             data = await entity.state_json()
             await self.queue.put(("state", data))
 
@@ -30,8 +35,11 @@ class WebServer(BasicEntity):
             await self.queue.put(("log", message))
 
     async def events(self, request: web.Request) -> web.StreamResponse:
+        device = self.device
+        if device is None:
+            raise RuntimeError("web server is not attached to a device")
         async with sse_response(request) as resp:
-            for entity in self.device.entities:
+            for entity in device.entities:
                 data = await entity.state_json()
                 if data != None:
                     await resp.send(data, event="state")
@@ -49,17 +57,20 @@ class WebServer(BasicEntity):
         return resp
 
     async def run(self) -> None:
+        device = self.device
+        if device is None:
+            raise RuntimeError("web server is not attached to a device")
         app = web.Application()
         app.router.add_route("GET", "/events", self.events)
         app.router.add_route("GET", "/", self.index)
 
-        for entity in self.device.entities:
+        for entity in device.entities:
             await entity.add_routes(app.router)
 
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self.port)
-        await self.device.log(2, "web", f"Starting web server on port {self.port}!")
+        await device.log(2, "web", f"Starting web server on port {self.port}!")
 
         await site.start()
 

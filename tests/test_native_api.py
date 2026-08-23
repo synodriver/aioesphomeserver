@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+from typing import Any
 from unittest.mock import patch
 
 from aioesphomeapi import APIClient, APIVersion
@@ -41,7 +42,7 @@ async def _read_plaintext_message(
     return message_type, await reader.readexactly(length)
 
 
-def _plaintext_frame(message: object) -> bytes:
+def _plaintext_frame(message: Any) -> bytes:
     payload = message.SerializeToString()
     message_type = PROTO_TO_MESSAGE_TYPE[type(message)]
     return b"".join(

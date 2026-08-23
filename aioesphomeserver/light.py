@@ -32,7 +32,7 @@ class LightEntity(BasicEntity):
 
         self.supported_color_modes = color_modes
         if effects == None:
-            self.effects = []
+            self.effects: Sequence[str] = []
             self.effect = None
         else:
             self.effects = effects
@@ -149,7 +149,10 @@ class LightEntity(BasicEntity):
                 attr = getattr(command, prop)
                 current_attr = getattr(self, prop)
                 if attr != current_attr:
-                    await self.device.log(
+                    device = self.device
+                    if device is None:
+                        raise RuntimeError("entity is not attached to a device")
+                    await device.log(
                         3, self.DOMAIN, f"[{self.object_id}] Setting {prop} to {attr}"
                     )
                     setattr(self, prop, attr)

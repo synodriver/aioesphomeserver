@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
-from aioesphomeapi.api_pb2 import ListEntitiesWaterHeaterResponse, WaterHeaterCommandRequest, WaterHeaterStateResponse
+from aioesphomeapi.api_pb2 import (
+    ListEntitiesWaterHeaterResponse,
+    WaterHeaterCommandRequest,
+    WaterHeaterStateResponse,
+)
 from aioesphomeapi.model import WaterHeaterCommandField, WaterHeaterStateFlag
 from aioesphomeserver.state_entity import _StateEntity
 
@@ -31,7 +35,7 @@ class WaterHeaterEntity(_StateEntity):
         self.min_temperature = 0.0
         self.max_temperature = 100.0
         self.target_temperature_step = 0.5
-        self.supported_modes = []
+        self.supported_modes: list[int] = []
         self.supported_features = 0
         self.temperature_unit = 0
 
