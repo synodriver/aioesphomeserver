@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from aioesphomeserver import Device, SupportsResponseType
+from aioesphomeserver import Device, ServiceArgument, SupportsResponseType
 
 
 class Application:
@@ -34,7 +34,11 @@ async def main() -> None:
     device.add_service(
         "set_scene",
         app.set_scene,
-        arguments={"scene": str, "brightness": float},
+        description="Select a scene and set its brightness.",
+        arguments={
+            "scene": ServiceArgument(str, "Scene name", "evening"),
+            "brightness": ServiceArgument(float, "Brightness from 0 to 1", "0.6"),
+        },
     )
     device.add_service("notify", app.notify, arguments={"message": str})
     device.add_service(
@@ -42,6 +46,7 @@ async def main() -> None:
         app.echo,
         arguments={"value": str},
         supports_response=SupportsResponseType.OPTIONAL,
+        description="Return the supplied value in a JSON response.",
     )
     await device.run(api_port=6053, web_port=None)
 

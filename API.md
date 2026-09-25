@@ -66,7 +66,7 @@ await device.run(api_port=6053, web_port=None)
 
 当前实现是启动时固定 PSK，不处理 `NoiseEncryptionSetKeyRequest`，也不把自己声明为可在线配网（`api_encryption_provisionable=false`）。修改密钥后必须同步更新 Home Assistant 中的配置。密钥不应写入日志或提交到公开仓库。
 
-服务端响应 API 版本 `1.15`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。为兼容 ESPHome API 1.15，库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；其中 `bluetooth_proxy.feature_flags` / `mac_address` 与旧版 `DeviceInfoResponse` 中的蓝牙字段保持一致，`voice_assistant.feature_flags` 也同步返回。当前依赖的 `aioesphomeapi 45.6.x` 尚未生成这两个 protobuf 类，因此本库内置了等价的轻量 wire 编解码；将来依赖库补齐后会自动使用官方类。
+服务端响应 API 版本 `1.18`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 `aioesphomeapi 46.5.0`，此版本已包含官方设备能力 protobuf 类。
 
 Native API 单帧 payload 最大为 `65535` 字节，varuint 最多 4 字节；服务端默认接受最多 6 个并发客户端，并要求明文客户端在 60 秒内发送首个消息。超过限制或发送错误前导的连接会被关闭，入站日志只记录 protobuf 消息类型，不记录参数和二进制 payload。
 
@@ -119,7 +119,7 @@ ESPHome YAML 的 `api: actions:` 在本库中对应 `Device.add_service()`。服
 `ExecuteServiceRequest` 执行注册的 Python 函数：
 
 ```python
-from aioesphomeserver import Device, SupportsResponseType
+from aioesphomeserver import Device, ServiceArgument, SupportsResponseType
 
 def set_scene(scene: str, brightness: float) -> None:
     print(scene, brightness)
@@ -130,14 +130,21 @@ async def notify(message: str) -> None:
 device.add_service(
     "set_scene",
     set_scene,
-    arguments={"scene": str, "brightness": float},
+    description="Select a scene and set its brightness.",
+    arguments={
+        "scene": ServiceArgument(str, "Scene name", "evening"),
+        "brightness": ServiceArgument(float, "Brightness from 0 to 1", "0.6"),
+    },
 )
 device.add_service("notify", notify, arguments={"message": str})
 ```
 
 `arguments` 的声明顺序决定回调的位置参数顺序。支持 `bool`、`int`、`float`、`str` 和
 `list[bool]`、`list[int]`、`list[float]`、`list[str]`；也可以直接使用 `ServiceArgType`
-枚举。回调可以是同步函数或异步函数，异步函数会被等待；执行期间 Native API 仍可处理
+枚举。`description` 写入 `ListEntitiesServicesResponse.description`；参数使用
+`ServiceArgument(type, description, example)` 时，后两个字符串写入
+`ListEntitiesServicesArgument.description` 和 `.example`。只传类型的旧用法继续有效，
+对应元数据为空字符串。回调可以是同步函数或异步函数，异步函数会被等待；执行期间 Native API 仍可处理
 Ping 和其他请求。参数数量不匹配或未知服务 key 会被忽略。
 
 默认服务不返回结果，对应 ESPHome 的 `supports_response: none`。需要返回数据时使用
@@ -268,3 +275,49 @@ await voice.finish_audio()
 只做播报、不采集麦克风的设备可使用 `VoiceAssistant(output_only=True)`。此模式与 Linux Voice Assistant 一样声明 `API_AUDIO | ANNOUNCE`，但不声明完整 `VOICE_ASSISTANT` 能力，也不允许调用 `start()`。`on_announcement()` 可等待实际播放结束再返回；它在独立任务中运行，不会在播放期间阻塞 Native API 心跳和其他消息。
 
 完整后端接入示例见 `examples/voice_assistant.py`。库不指定音频采集、播放、媒体 URL 下载或唤醒词引擎，应用在对应的异步钩子中接入自己的实现。
+
+## Serial Proxy 与 Z-Wave Proxy
+
+`Device(serial_proxies=[...], zwave_proxy=...)` 在 `DeviceInfoResponse` 和 `DeviceCapabilitiesResponse` 中发布对应能力。串口端口按列表顺序编号，从 0 开始。两个代理都由应用子类接入硬件，本库负责 Native API 消息编解码、独占订阅、权限检查、操作回执及断线清理。`aioesphomeapi>=46.5.0` 的官方客户端可直接使用 `serial_proxy_*` 和 `zwave_proxy_*` 方法。
+
+```python
+from aioesphomeapi.model import SerialProxyStatus
+from aioesphomeserver import Device, SerialProxy, ZWaveProxy
+
+class MySerialPort(SerialProxy):
+    async def on_configure(self, request):
+        await uart.configure(request.baudrate, request.parity, request.stop_bits)
+
+    async def on_write(self, data: bytes):
+        await uart.write(data)
+
+    async def on_flush(self):
+        await uart.drain()
+        return SerialProxyStatus.OK
+
+    # 从 UART 读到数据时调用 await self.publish_data(data)
+
+class MyZWaveController(ZWaveProxy):
+    async def on_frame(self, data: bytes):
+        await controller.write(data)
+
+    # 从控制器读到帧时调用 await self.publish_frame(frame)
+
+device = Device(
+    name="gateway",
+    serial_proxies=[MySerialPort("UART 1")],
+    zwave_proxy=MyZWaveController(home_id=0x12345678),
+)
+```
+
+串口后端还可覆盖 `on_subscribe()`、`on_unsubscribe()`、`on_set_modem_pins()`、`on_get_modem_pins()`、`on_set_mode()`；不支持的操作默认返回 `NOT_SUPPORTED`。主动调用 `publish_identity()` 会更新已订阅客户端的串口身份。Z-Wave 后端调用 `publish_home_id()` 报告 Home ID 变化。未订阅的客户端不能写串口或 Z-Wave 帧，也不能配置串口；第二个订阅者收到 `PORT_IN_USE` 或 `IN_USE`。红外/RF 发送命令结束后，服务端会向发起方发送 `InfraredRFTransmitCompleteResponse`，使新版客户端能按实际完成时间发送下一帧。
+
+真实串口接入见 `examples/serialx_proxy.py`，Z-Wave Serial API 控制器接入见
+`examples/zwave_serialx_proxy.py`。两者都使用 `serialx` 异步端口，需要 Python 3.12 环境和本机串口设备；本库将其列为可选的 `serial` 依赖组。示例命令：
+
+```powershell
+D:\conda\envs\hass\python.exe -m examples.serialx_proxy COM3
+D:\conda\envs\hass\python.exe -m examples.zwave_serialx_proxy COM4
+```
+
+Linux 上将 `COM3`、`COM4` 替换为实际设备路径。串口示例收到客户端配置后重开串口以应用波特率、校验位、停止位、数据位和硬件流控；Z-Wave 示例按 Serial API 帧边界转发，并查询 Home ID。无硬件测试使用模拟 `serialx` 端口，不验证目标串口或控制器的实际行为。

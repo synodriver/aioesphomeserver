@@ -22,7 +22,11 @@ from typing import Any
 # installed aioesphomeserver package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aioesphomeapi.model import BluetoothProxyFeature
+from aioesphomeapi.model import (
+    BluetoothProxyFeature,
+    EntityCategory,
+    SensorStateClass,
+)
 from bleak import BleakClient, BleakError, BleakScanner
 from bleak.assigned_numbers import AdvertisementDataType
 from bleak.backends.device import BLEDevice
@@ -36,6 +40,7 @@ from aioesphomeserver import (
     BluetoothGATTService,
     BluetoothProxy,
     Device,
+    SensorEntity,
     TextSensorEntity,
     bluetooth_address_to_int,
     bluetooth_address_to_str,
@@ -53,6 +58,10 @@ BLUEZ_PASSIVE_OR_PATTERNS = [
 ]
 API_PORT = 6053
 WEB_PORT: int | None = None
+TEMPERATURE_UPDATE_INTERVAL = 10.0
+THERMAL_ROOT = Path("/sys/class/thermal")
+CPU_THERMAL_TYPE_HINTS = ("cpu", "soc", "package")
+GPU_THERMAL_TYPE_HINTS = ("gpu",)
 
 
 class BleakBluetoothProxy(BluetoothProxy):
@@ -280,6 +289,80 @@ def _stable_host_mac(label: str) -> str:
     return ":".join(f"{part:02X}" for part in value)
 
 
+def _cpu_temperature_path(thermal_root: Path = THERMAL_ROOT) -> Path:
+    """Find the CPU thermal zone exposed by the Linux thermal subsystem."""
+    zones = [
+        zone
+        for zone in sorted(thermal_root.glob("thermal_zone*"))
+        if (zone / "temp").is_file()
+    ]
+    if not zones:
+        raise FileNotFoundError(f"no thermal zones found under {thermal_root}")
+
+    for zone in zones:
+        with suppress(OSError):
+            zone_type = (zone / "type").read_text(encoding="ascii").strip().lower()
+            if any(hint in zone_type for hint in CPU_THERMAL_TYPE_HINTS):
+                return zone / "temp"
+    return zones[0] / "temp"
+
+
+def _read_cpu_temperature(thermal_root: Path = THERMAL_ROOT) -> float:
+    """Read a Linux thermal-zone temperature and convert millidegrees to Celsius."""
+    path = _cpu_temperature_path(thermal_root)
+    temperature = float(path.read_text(encoding="ascii").strip()) / 1000.0
+    if not -273.15 <= temperature <= 250.0:
+        raise ValueError(f"invalid CPU temperature from {path}: {temperature}")
+    return temperature
+
+
+def _gpu_temperature_path(thermal_root: Path = THERMAL_ROOT) -> Path:
+    """Find the GPU thermal zone exposed by the Linux thermal subsystem."""
+    for zone in sorted(thermal_root.glob("thermal_zone*")):
+        if not (zone / "temp").is_file():
+            continue
+        with suppress(OSError):
+            zone_type = (zone / "type").read_text(encoding="ascii").strip().lower()
+            if any(hint in zone_type for hint in GPU_THERMAL_TYPE_HINTS):
+                return zone / "temp"
+    raise FileNotFoundError(f"no GPU thermal zone found under {thermal_root}")
+
+
+def _read_gpu_temperature(thermal_root: Path = THERMAL_ROOT) -> float:
+    """Read a Linux GPU thermal-zone temperature in Celsius."""
+    path = _gpu_temperature_path(thermal_root)
+    temperature = float(path.read_text(encoding="ascii").strip()) / 1000.0
+    if not -273.15 <= temperature <= 250.0:
+        raise ValueError(f"invalid GPU temperature from {path}: {temperature}")
+    return temperature
+
+
+async def update_temperature(
+    sensor: SensorEntity,
+    reader: Callable[[Path], float],
+    label: str,
+    *,
+    interval: float = TEMPERATURE_UPDATE_INTERVAL,
+    thermal_root: Path = THERMAL_ROOT,
+) -> None:
+    """Publish a host temperature without stopping the Bluetooth proxy."""
+    previous_error: str | None = None
+    while True:
+        try:
+            temperature = await asyncio.to_thread(reader, thermal_root)
+        except (OSError, ValueError) as err:
+            error = str(err)
+            if error != previous_error:
+                logger.warning("Unable to read %s temperature: %s", label, err)
+            previous_error = error
+        else:
+            if previous_error is not None:
+                logger.info("%s temperature reading recovered", label)
+            previous_error = None
+            await sensor.set_state(temperature)
+        await asyncio.sleep(interval)
+
+
 def build_device(*, bluez_adapter: str | None = None) -> Device:
     """Build the example device without starting the network servers."""
     if bluez_adapter is None and sys.platform.startswith("linux"):
@@ -296,6 +379,9 @@ def build_device(*, bluez_adapter: str | None = None) -> Device:
             bluetooth_mac_address=bluetooth_mac_address,
             max_connections=9,
         ),
+        project_name="synodriver.bleak-bluetooth-proxy",
+        project_version="1.0.0",
+        esphome_version="1145.1.4"
     )
     device.add_entity(
         TextSensorEntity(
@@ -303,6 +389,30 @@ def build_device(*, bluez_adapter: str | None = None) -> Device:
             object_id="ip_address",
             icon="mdi:ip-network",
             initial_state=device.get_ip_address(),
+        )
+    )
+    device.add_entity(
+        SensorEntity(
+            name="CPU temperature",
+            object_id="cpu_temperature",
+            icon="mdi:thermometer",
+            device_class="temperature",
+            unit_of_measurement="°C",
+            accuracy_decimals=1,
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        )
+    )
+    device.add_entity(
+        SensorEntity(
+            name="GPU temperature",
+            object_id="gpu_temperature",
+            icon="mdi:thermometer",
+            device_class="temperature",
+            unit_of_measurement="°C",
+            accuracy_decimals=1,
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
         )
     )
     return device
@@ -347,8 +457,21 @@ def _print_startup_diagnostics(
 
 async def main() -> None:
     device = build_device()
+    cpu_temperature = device.get_entity("cpu_temperature")
+    if not isinstance(cpu_temperature, SensorEntity):
+        raise RuntimeError("CPU temperature sensor is missing")
+    gpu_temperature = device.get_entity("gpu_temperature")
+    if not isinstance(gpu_temperature, SensorEntity):
+        raise RuntimeError("GPU temperature sensor is missing")
     _print_startup_diagnostics(device, api_port=API_PORT, web_port=WEB_PORT)
-    await device.run(api_port=API_PORT, web_port=WEB_PORT)
+    async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(
+            update_temperature(cpu_temperature, _read_cpu_temperature, "CPU")
+        )
+        tasks.create_task(
+            update_temperature(gpu_temperature, _read_gpu_temperature, "GPU")
+        )
+        tasks.create_task(device.run(api_port=API_PORT, web_port=WEB_PORT))
 
 
 if __name__ == "__main__":

@@ -43,7 +43,18 @@ class SupportsResponseType(IntEnum):
 
 
 ServiceCallback = Callable[..., Any]
-ServiceArgumentSpec = Mapping[str, ServiceArgType | type[Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceArgument:
+    """One action argument and its discovery metadata."""
+
+    type: ServiceArgType | type[Any]
+    description: str = ""
+    example: str = ""
+
+
+ServiceArgumentSpec = Mapping[str, ServiceArgType | type[Any] | ServiceArgument]
 
 
 def _fnv1_hash(value: str) -> int:
@@ -141,37 +152,52 @@ class UserService:
     callback: ServiceCallback
     arguments: ServiceArgumentSpec | None = None
     supports_response: SupportsResponseType | str | int = SupportsResponseType.NONE
+    description: str = ""
     key: int = field(init=False)
-    _arguments: tuple[tuple[str, ServiceArgType], ...] = field(init=False, repr=False)
+    _arguments: tuple[tuple[str, ServiceArgType, str, str], ...] = field(
+        init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("service name cannot be empty")
         if not callable(self.callback):
             raise TypeError("service callback must be callable")
-        self._arguments = tuple(
-            (name, _argument_type(arg_type))
-            for name, arg_type in dict(self.arguments or {}).items()
-        )
-        if len({name for name, _ in self._arguments}) != len(self._arguments):
+        if not isinstance(self.description, str):
+            raise TypeError("service description must be a string")
+        arguments = []
+        for name, spec in (self.arguments or {}).items():
+            if isinstance(spec, ServiceArgument):
+                if not isinstance(spec.description, str) or not isinstance(spec.example, str):
+                    raise TypeError("service argument metadata must be strings")
+                arguments.append(
+                    (name, _argument_type(spec.type), spec.description, spec.example)
+                )
+            else:
+                arguments.append((name, _argument_type(spec), "", ""))
+        self._arguments = tuple(arguments)
+        if len({name for name, *_ in self._arguments}) != len(self._arguments):
             raise ValueError("service argument names must be unique")
         self.supports_response = _response_mode(self.supports_response)
         self.key = _fnv1_hash(self.name)
 
     @property
     def argument_types(self) -> tuple[tuple[str, ServiceArgType], ...]:
-        return self._arguments
+        return tuple((name, arg_type) for name, arg_type, _, _ in self._arguments)
 
     def list_entities_response(self) -> ListEntitiesServicesResponse:
         response = ListEntitiesServicesResponse(
             name=self.name,
             key=self.key,
             supports_response=int(self.supports_response),
+            description=self.description,
         )
-        for name, arg_type in self._arguments:
+        for name, arg_type, description, example in self._arguments:
             argument = response.args.add()
             argument.name = name
             argument.type = int(arg_type)
+            argument.description = description
+            argument.example = example
         return response
 
     def should_respond(self, request: ExecuteServiceRequest) -> bool:
@@ -184,7 +210,7 @@ class UserService:
             return
         values = [
             _decode_argument(arg, arg_type)
-            for arg, (_, arg_type) in zip(request.args, self._arguments)
+            for arg, (_, arg_type, _, _) in zip(request.args, self._arguments)
         ]
         response: ExecuteServiceResponse | None = None
         try:
@@ -216,4 +242,4 @@ class UserService:
             await client.write_message(response)
 
 
-__all__ = ["ServiceArgType", "SupportsResponseType", "UserService"]
+__all__ = ["ServiceArgType", "ServiceArgument", "SupportsResponseType", "UserService"]

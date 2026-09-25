@@ -3,7 +3,7 @@ import asyncio
 from aioesphomeapi import APIClient
 from aioesphomeapi.model import SupportsResponseType
 
-from aioesphomeserver import Device, NativeApiServer
+from aioesphomeserver import Device, NativeApiServer, ServiceArgument
 
 
 async def _wait_for(predicate, timeout=2.0):
@@ -34,12 +34,13 @@ async def _test_user_services_are_discoverable_and_execute_sync_and_async_callba
             "enabled": bool,
             "count": int,
             "ratio": float,
-            "label": str,
+            "label": ServiceArgument(str, "Label to store", "demo"),
             "flags": list[bool],
             "counts": list[int],
             "ratios": list[float],
             "labels": list[str],
         },
+        description="Set all sample values.",
     )
     async_service_info = device.add_service(
         "announce",
@@ -58,6 +59,12 @@ async def _test_user_services_are_discoverable_and_execute_sync_and_async_callba
         assert [service.name for service in services] == ["set_values", "announce"]
         assert services[0].key == sync.key
         assert services[1].key == async_service_info.key
+        assert services[0].description == "Set all sample values."
+        assert services[0].args[3].description == "Label to store"
+        assert services[0].args[3].example == "demo"
+        assert services[0].args[0].description == ""
+        assert services[0].args[0].example == ""
+        assert sync.argument_types[3][0] == "label"
 
         await client.execute_service(
             services[0],

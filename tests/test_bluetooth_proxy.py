@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from aioesphomeapi.api_pb2 import (
     BluetoothDeviceRequest,
     BluetoothGATTGetServicesRequest,
     BluetoothGATTReadRequest,
+    ListEntitiesSensorResponse,
     ListEntitiesTextSensorResponse,
 )
 from aioesphomeapi.model import (
@@ -14,6 +16,8 @@ from aioesphomeapi.model import (
     BluetoothProxyFeature,
     BluetoothScannerMode,
     BluetoothScannerState,
+    EntityCategory,
+    SensorStateClass,
 )
 
 from aioesphomeserver import Device, NativeApiServer
@@ -240,7 +244,7 @@ def test_bleak_example_restores_runtime_scan_mode_support() -> None:
     assert proxy.feature_flags & int(BluetoothProxyFeature.RAW_ADVERTISEMENTS)
 
 
-def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
+def test_bleak_example_device_exposes_diagnostics_and_bluetooth_info() -> None:
     async def run() -> None:
         from examples.bleak_proxy import build_device
 
@@ -272,6 +276,33 @@ def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
         assert ip_sensor.object_id == "ip_address"
         assert ip_sensor.name == "IP address"
 
+        sensors = [
+            response
+            for response in responses
+            if type(response) is ListEntitiesSensorResponse
+        ]
+        assert len(sensors) == 2
+        sensors_by_object_id = {
+            sensor.object_id: sensor for sensor in sensors if sensor is not None
+        }
+        cpu_temperature = sensors_by_object_id["cpu_temperature"]
+        assert cpu_temperature is not None
+        assert cpu_temperature.object_id == "cpu_temperature"
+        assert cpu_temperature.name == "CPU temperature"
+        assert cpu_temperature.device_class == "temperature"
+        assert cpu_temperature.unit_of_measurement == "°C"
+        assert cpu_temperature.accuracy_decimals == 1
+        assert cpu_temperature.state_class == SensorStateClass.MEASUREMENT
+        assert cpu_temperature.entity_category == EntityCategory.DIAGNOSTIC
+
+        gpu_temperature = sensors_by_object_id["gpu_temperature"]
+        assert gpu_temperature.name == "GPU temperature"
+        assert gpu_temperature.device_class == "temperature"
+        assert gpu_temperature.unit_of_measurement == "°C"
+        assert gpu_temperature.accuracy_decimals == 1
+        assert gpu_temperature.state_class == SensorStateClass.MEASUREMENT
+        assert gpu_temperature.entity_category == EntityCategory.DIAGNOSTIC
+
         ip_entity = device.get_entity("ip_address")
         assert ip_entity is not None
         state = await ip_entity.build_state_response()
@@ -280,6 +311,30 @@ def test_bleak_example_device_exposes_ip_sensor_and_bluetooth_info() -> None:
         assert state.key == ip_sensor.key
 
     asyncio.run(run())
+
+
+def test_bleak_example_reads_cpu_temperature_zone(tmp_path: Path) -> None:
+    from examples.bleak_proxy import (
+        _cpu_temperature_path,
+        _gpu_temperature_path,
+        _read_cpu_temperature,
+        _read_gpu_temperature,
+    )
+
+    gpu_zone = tmp_path / "thermal_zone0"
+    gpu_zone.mkdir()
+    (gpu_zone / "type").write_text("gpu-thermal\n", encoding="ascii")
+    (gpu_zone / "temp").write_text("61000\n", encoding="ascii")
+
+    cpu_zone = tmp_path / "thermal_zone1"
+    cpu_zone.mkdir()
+    (cpu_zone / "type").write_text("cpu-thermal\n", encoding="ascii")
+    (cpu_zone / "temp").write_text("48750\n", encoding="ascii")
+
+    assert _cpu_temperature_path(tmp_path) == cpu_zone / "temp"
+    assert _read_cpu_temperature(tmp_path) == 48.75
+    assert _gpu_temperature_path(tmp_path) == gpu_zone / "temp"
+    assert _read_gpu_temperature(tmp_path) == 61.0
 
 
 def test_bluetooth_proxy_normalizes_and_validates_adapter_mac() -> None:

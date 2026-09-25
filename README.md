@@ -22,6 +22,8 @@ Allow your Python program to show up to Home Assistant as an ESPHome device.
   - Alarm control panel, Date, DateTime, Time, Update, Event
   - Camera, Infrared, Radio frequency
 * Bluetooth proxy abstraction with an optional Bleak backend example
+* Backend-neutral serial and Z-Wave proxy support for Native API 1.18 clients
+* Action and argument descriptions/examples in service discovery
 * Backend-neutral ESPHome Voice Assistant protocol support
 * Optional ESPHome-compatible Noise encryption for the native API
 

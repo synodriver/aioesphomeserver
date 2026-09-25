@@ -10,7 +10,7 @@ import re
 import socket
 from inspect import getframeinfo, stack
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from aioesphomeapi.api_pb2 import DeviceInfoResponse, HomeassistantActionResponse
 from aioesphomeapi.model import BluetoothProxyFeature
@@ -24,8 +24,10 @@ from aioesphomeserver.services import SupportsResponseType
 
 if TYPE_CHECKING:
     from aioesphomeserver.bluetooth_proxy import BluetoothProxy
-    from aioesphomeserver.services import ServiceArgType, UserService
+    from aioesphomeserver.services import ServiceArgType, ServiceArgument, UserService
+    from aioesphomeserver.serial_proxy import SerialProxy
     from aioesphomeserver.voice_assistant import VoiceAssistant
+    from aioesphomeserver.zwave_proxy import ZWaveProxy
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,8 @@ class Device:
         platform: str | None = None,
         bluetooth_proxy: BluetoothProxy | None = None,
         voice_assistant: VoiceAssistant | None = None,
+        serial_proxies: Sequence[SerialProxy] = (),
+        zwave_proxy: ZWaveProxy | None = None,
         encryption_key: str | bytes | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
@@ -112,6 +116,10 @@ class Device:
         self.voice_assistant = voice_assistant
         if self.voice_assistant is not None:
             self.voice_assistant.device = self
+        self.serial_proxies = list(serial_proxies)
+        for instance, proxy in enumerate(self.serial_proxies):
+            proxy.instance = instance
+        self.zwave_proxy = zwave_proxy
         self.encryption_key, self.encryption_key_bytes = _normalize_encryption_key(
             encryption_key
         )
@@ -179,6 +187,10 @@ class Device:
                 self.voice_assistant.legacy_version
             )
             response.voice_assistant_feature_flags = self.voice_assistant.feature_flags
+        if self.zwave_proxy is not None:
+            response.zwave_proxy_feature_flags = self.zwave_proxy.feature_flags
+            response.zwave_home_id = self.zwave_proxy.home_id
+        response.serial_proxies.extend(proxy.info() for proxy in self.serial_proxies)
         return response
 
     async def build_device_capabilities_response(self) -> DeviceCapabilitiesResponse:
@@ -190,6 +202,10 @@ class Device:
             )
         if self.voice_assistant is not None:
             response.voice_assistant.feature_flags = self.voice_assistant.feature_flags
+        if self.zwave_proxy is not None:
+            response.zwave_proxy.feature_flags = self.zwave_proxy.feature_flags
+            response.zwave_proxy.home_id = self.zwave_proxy.home_id
+        response.serial_proxies.extend(proxy.info() for proxy in self.serial_proxies)
         return response
 
     async def log(self, level: int, tag: str, message: str) -> None:
@@ -230,8 +246,9 @@ class Device:
         name: str,
         callback: Callable[..., Any],
         *,
-        arguments: Mapping[str, ServiceArgType | type[Any]] | None = None,
+        arguments: Mapping[str, ServiceArgType | type[Any] | ServiceArgument] | None = None,
         supports_response: SupportsResponseType | str | int = SupportsResponseType.NONE,
+        description: str = "",
     ) -> UserService:
         """Expose a Python callback as an ESPHome user-defined API action."""
         from aioesphomeserver.services import UserService
@@ -241,6 +258,7 @@ class Device:
             callback,
             arguments=arguments,
             supports_response=supports_response,
+            description=description,
         )
         if any(existing.name == service.name for existing in self.services):
             raise ValueError(f"Duplicate service name: {service.name}")

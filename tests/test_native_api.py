@@ -77,7 +77,7 @@ async def _test_official_client_can_read_entities():
             await asyncio.sleep(0)
         client = APIClient("127.0.0.1", api.bound_port, keepalive=60)
         await client.connect()
-        assert client.api_version == APIVersion(1, 15)
+        assert client.api_version == APIVersion(1, 18)
         info, entities, _services = await client.device_info_and_list_entities()
         assert info.name == "protocol-test"
         assert info.friendly_name == "Protocol Test"
@@ -135,7 +135,7 @@ async def _test_device_capabilities_request_returns_bluetooth_proxy_capabilities
         assert message_type == PROTO_TO_MESSAGE_TYPE[HelloResponse]
         hello = HelloResponse()
         hello.ParseFromString(payload)
-        assert hello.api_version_minor == 15
+        assert hello.api_version_minor == 18
 
         writer.write(_plaintext_frame(DeviceCapabilitiesRequest()))
         await writer.drain()

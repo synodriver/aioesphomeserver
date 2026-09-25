@@ -24,6 +24,7 @@ from aioesphomeserver.native_api_server import *
 from aioesphomeserver.number import *
 from aioesphomeserver.radio_frequency import *
 from aioesphomeserver.select import *
+from aioesphomeserver.serial_proxy import *
 from aioesphomeserver.sensor import *
 from aioesphomeserver.services import *
 from aioesphomeserver.siren import *
@@ -36,3 +37,4 @@ from aioesphomeserver.valve import *
 from aioesphomeserver.voice_assistant import *
 from aioesphomeserver.water_heater import *
 from aioesphomeserver.web_server import *
+from aioesphomeserver.zwave_proxy import *

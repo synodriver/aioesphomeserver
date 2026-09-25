@@ -15,6 +15,8 @@ from aioesphomeapi.api_pb2 import GetTimeRequest  # type: ignore
 from aioesphomeapi.api_pb2 import GetTimeResponse  # type: ignore
 from aioesphomeapi.api_pb2 import HelloRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HelloResponse  # type: ignore
+from aioesphomeapi.api_pb2 import InfraredRFTransmitCompleteResponse  # type: ignore
+from aioesphomeapi.api_pb2 import InfraredRFTransmitRawTimingsRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HomeassistantActionRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HomeassistantActionResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesDoneResponse  # type: ignore
@@ -27,6 +29,18 @@ from aioesphomeapi.api_pb2 import SubscribeHomeAssistantStatesRequest  # type: i
 from aioesphomeapi.api_pb2 import SubscribeLogsRequest  # type: ignore
 from aioesphomeapi.api_pb2 import SubscribeLogsResponse  # type: ignore
 from aioesphomeapi.api_pb2 import SubscribeStatesRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeSerialProxyIdentityRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyConfigureRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyGetModemPinsRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyGetModemPinsResponse  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyRequestResponse  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxySetModeRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxySetModemPinsRequest  # type: ignore
+from aioesphomeapi.api_pb2 import SerialProxyWriteRequest  # type: ignore
+from aioesphomeapi.api_pb2 import ZWaveProxyFrame  # type: ignore
+from aioesphomeapi.api_pb2 import ZWaveProxyRequest  # type: ignore
+from aioesphomeapi.model import SerialProxyRequestType, SerialProxyStatus
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from noise.connection import NoiseConnection
 from noise.exceptions import NoiseInvalidMessage
@@ -42,7 +56,7 @@ if TYPE_CHECKING:
     from aioesphomeserver.device import Device
 
 API_VERSION_MAJOR = 1
-API_VERSION_MINOR = 15
+API_VERSION_MINOR = 18
 # ESPHome's native API uses a uint16 length on the wire.  Keep the plaintext
 # path aligned with the Noise path and the official Python client.
 MAX_MESSAGE_SIZE = 65535
@@ -428,6 +442,11 @@ class NativeApiServer(BasicEntity):
             voice_assistant = self.attached_device.voice_assistant
             if voice_assistant is not None:
                 await voice_assistant.on_api_client_disconnected(connection)
+            for proxy in self.attached_device.serial_proxies:
+                await proxy.on_api_client_disconnected(connection)
+            zwave_proxy = self.attached_device.zwave_proxy
+            if zwave_proxy is not None:
+                await zwave_proxy.on_api_client_disconnected(connection)
             if task is not None:
                 self._client_tasks.discard(task)
 
@@ -451,6 +470,68 @@ class NativeApiServer(BasicEntity):
             await client.write_message(
                 await self.attached_device.build_device_capabilities_response()
             )
+            return
+
+        if type(message) is SubscribeSerialProxyIdentityRequest:
+            for proxy in self.attached_device.serial_proxies:
+                proxy._identity_clients.add(client)
+                if proxy.identity is not None:
+                    proxy.identity.instance = proxy.instance
+                    await client.write_message(proxy.identity)
+            return
+
+        if type(message) in (
+            SerialProxyRequest,
+            SerialProxyConfigureRequest,
+            SerialProxyWriteRequest,
+            SerialProxySetModemPinsRequest,
+            SerialProxyGetModemPinsRequest,
+            SerialProxySetModeRequest,
+        ):
+            proxies = self.attached_device.serial_proxies
+            if message.instance >= len(proxies):
+                if type(message) is SerialProxyGetModemPinsRequest:
+                    await client.write_message(SerialProxyGetModemPinsResponse(
+                        instance=message.instance, status=SerialProxyStatus.INVALID_ARGUMENT
+                    ))
+                elif type(message) is not SerialProxyWriteRequest:
+                    kind = (
+                        message.type if type(message) is SerialProxyRequest else {
+                            SerialProxyConfigureRequest: SerialProxyRequestType.CONFIGURE,
+                            SerialProxySetModemPinsRequest: SerialProxyRequestType.SET_MODEM_PINS,
+                            SerialProxySetModeRequest: SerialProxyRequestType.SET_MODE,
+                        }[type(message)]
+                    )
+                    await client.write_message(SerialProxyRequestResponse(
+                        instance=message.instance, type=kind,
+                        status=SerialProxyStatus.INVALID_ARGUMENT,
+                    ))
+                return
+            await proxies[message.instance].handle_message(client, message)
+            return
+
+        zwave_proxy = self.attached_device.zwave_proxy
+        if zwave_proxy is not None and type(message) in (ZWaveProxyFrame, ZWaveProxyRequest):
+            await zwave_proxy.handle_message(client, message)
+            return
+
+        if type(message) is InfraredRFTransmitRawTimingsRequest:
+            from aioesphomeserver.infrared import InfraredEntity
+
+            success = False
+            entity = self.attached_device.get_entity_by_key(message.key)
+            if isinstance(entity, InfraredEntity):
+                try:
+                    await entity.on_command(
+                        message.carrier_frequency, message.repeat_count,
+                        tuple(message.timings), message.modulation,
+                    )
+                    success = True
+                except Exception:
+                    logger.exception("Infrared/RF transmit failed")
+            await client.write_message(InfraredRFTransmitCompleteResponse(
+                device_id=message.device_id, key=message.key, success=success,
+            ))
             return
 
         bluetooth_proxy = self.attached_device.bluetooth_proxy
