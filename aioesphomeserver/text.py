@@ -40,10 +40,14 @@ class TextEntity(_StateEntity):
             max_length=self.max_length,
             pattern=self.pattern,
             mode=self.mode,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> TextStateResponse:
-        return TextStateResponse(key=self.key, state=await self.get_state())
+        return TextStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def get_state(self) -> str:
         return self._state

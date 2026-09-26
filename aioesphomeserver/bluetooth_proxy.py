@@ -430,9 +430,12 @@ class BluetoothProxy:
                 )
                 return
             try:
+                address_type = (
+                    message.address_type if message.has_address_type else 0
+                )
                 mtu = await self.connect(
                     message.address,
-                    message.address_type,
+                    address_type,
                     request_type == BluetoothDeviceRequestType.CONNECT_V3_WITH_CACHE,
                 )
             except BluetoothProxyError as error:

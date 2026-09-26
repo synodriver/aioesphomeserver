@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +18,10 @@ from aioesphomeapi.api_pb2 import InfraredRFTransmitCompleteResponse  # type: ig
 from aioesphomeapi.api_pb2 import InfraredRFTransmitRawTimingsRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HomeassistantActionRequest  # type: ignore
 from aioesphomeapi.api_pb2 import HomeassistantActionResponse  # type: ignore
+from aioesphomeapi.api_pb2 import HomeAssistantStateResponse  # type: ignore
+from aioesphomeapi.api_pb2 import SubscribeHomeAssistantStateResponse  # type: ignore
+from aioesphomeapi.api_pb2 import NoiseEncryptionSetKeyRequest  # type: ignore
+from aioesphomeapi.api_pb2 import NoiseEncryptionSetKeyResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesDoneResponse  # type: ignore
 from aioesphomeapi.api_pb2 import ExecuteServiceRequest  # type: ignore
 from aioesphomeapi.api_pb2 import ListEntitiesRequest  # type: ignore
@@ -104,8 +107,11 @@ class NativeApiConnection:
         self.reader = reader
         self.writer = writer
         self.subscribe_to_logs = False
+        self.log_level = 0
+        self.client_info = ""
         self.subscribe_to_states = False
         self.subscribe_to_homeassistant_services = False
+        self.subscribe_to_homeassistant_states = False
         self.running = True
         self._write_lock = asyncio.Lock()
         self._noise: NoiseConnection | None = None
@@ -149,6 +155,10 @@ class NativeApiConnection:
         await self.server.log(type(message).__name__)
 
         if type(message) is HelloRequest:
+            self.client_info = message.client_info
+            if message.outgoing_connection_target:
+                self.running = False
+                return
             await self.write_message(
                 HelloResponse(
                     api_version_major=API_VERSION_MAJOR,
@@ -163,13 +173,16 @@ class NativeApiConnection:
             await self.write_message(DisconnectResponse())
             self.running = False
         elif type(message) is SubscribeLogsRequest:
-            self.subscribe_to_logs = True
+            self.log_level = message.level
+            self.subscribe_to_logs = message.level > 0
+            if message.dump_config:
+                await self.server.attached_device.dump_config(self)
+        elif type(message) is NoiseEncryptionSetKeyRequest:
+            await self.server.handle_noise_key_request(self, message)
         elif type(message) is PingRequest:
             await self.write_message(PingResponse())
-        elif type(message) is GetTimeRequest:
-            await self.write_message(
-                GetTimeResponse(epoch_seconds=int(time.time()), timezone="UTC")
-            )
+        elif type(message) is GetTimeResponse:
+            await self.server.attached_device.handle_time_response(message)
         elif type(message) is SubscribeStatesRequest:
             self.subscribe_to_states = True
             await self.server.send_all_states(self)
@@ -179,10 +192,14 @@ class NativeApiConnection:
             task.add_done_callback(self._service_tasks.discard)
         elif type(message) is HomeassistantActionResponse:
             self.server.handle_homeassistant_action_response(message)
+        elif type(message) is HomeAssistantStateResponse:
+            await self.server.handle_homeassistant_state_response(message)
         else:
             await self.server.handle_client_request(self, message)
 
     async def log(self, level: int, message: str) -> None:
+        if not self.subscribe_to_logs or level > self.log_level:
+            return
         await self.write_message(
             SubscribeLogsResponse(level=level, message=message.encode("utf-8"))
         )
@@ -387,6 +404,8 @@ class NativeApiServer(BasicEntity):
         self._homeassistant_action_clients: dict[
             int, set[NativeApiConnection]
         ] = {}
+        self._homeassistant_state_clients: set[NativeApiConnection] = set()
+        self._homeassistant_state_subscriptions: dict[tuple[str, str], bool] = {}
         self.server: asyncio.Server | None = None
         self._started = asyncio.Event()
 
@@ -435,6 +454,7 @@ class NativeApiServer(BasicEntity):
             await connection.start()
         finally:
             self._remove_homeassistant_action_client(connection)
+            self._homeassistant_state_clients.discard(connection)
             self._clients.discard(connection)
             bluetooth_proxy = self.attached_device.bluetooth_proxy
             if bluetooth_proxy is not None:
@@ -457,6 +477,14 @@ class NativeApiServer(BasicEntity):
             client.subscribe_to_homeassistant_services = True
             return
         if type(message) is SubscribeHomeAssistantStatesRequest:
+            client.subscribe_to_homeassistant_states = True
+            self._homeassistant_state_clients.add(client)
+            for (entity_id, attribute), once in tuple(
+                self._homeassistant_state_subscriptions.items()
+            ):
+                await client.write_message(SubscribeHomeAssistantStateResponse(
+                    entity_id=entity_id, attribute=attribute, once=once
+                ))
             return
         if type(message) is ListEntitiesRequest:
             await self.handle_list_entities(client)
@@ -651,6 +679,45 @@ class NativeApiServer(BasicEntity):
             if future is not None:
                 self._homeassistant_action_futures.pop(request.call_id, None)
                 self._homeassistant_action_clients.pop(request.call_id, None)
+
+    async def send_homeassistant_state_subscription(
+        self, entity_id: str, attribute: str = "", once: bool = False
+    ) -> None:
+        """Ask Home Assistant to track a state or attribute for the device."""
+        if not entity_id:
+            raise ValueError("Home Assistant entity_id cannot be empty")
+        subscription = (entity_id, attribute)
+        if self._homeassistant_state_subscriptions.get(subscription) == once:
+            return
+        self._homeassistant_state_subscriptions[subscription] = once
+        request = SubscribeHomeAssistantStateResponse(
+            entity_id=entity_id, attribute=attribute, once=once
+        )
+        for client in tuple(self._homeassistant_state_clients):
+            if client.running:
+                await client.write_message(request)
+
+    async def request_time(self) -> None:
+        """Ask connected clients for their clock and timezone."""
+        for client in tuple(self._clients):
+            if client.running:
+                await client.write_message(GetTimeRequest())
+
+    async def handle_homeassistant_state_response(
+        self, response: HomeAssistantStateResponse
+    ) -> None:
+        subscription = (response.entity_id, response.attribute)
+        once = self._homeassistant_state_subscriptions.get(subscription)
+        if once is None:
+            return
+        if once:
+            self._homeassistant_state_subscriptions.pop(subscription, None)
+        await self.attached_device.handle_homeassistant_state(response)
+
+    async def handle_noise_key_request(
+        self, client: NativeApiConnection, request: NoiseEncryptionSetKeyRequest
+    ) -> None:
+        await client.write_message(NoiseEncryptionSetKeyResponse(success=False))
 
     def handle_homeassistant_action_response(
         self, response: HomeassistantActionResponse

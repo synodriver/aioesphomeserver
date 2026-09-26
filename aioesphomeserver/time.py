@@ -24,11 +24,14 @@ class TimeEntity(_StateEntity):
             name=self.name,
             icon=self.icon,
             entity_category=self.entity_category,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> TimeStateResponse:
         return TimeStateResponse(
-            key=self.key, hour=self.hour, minute=self.minute, second=self.second
+            key=self.key, hour=self.hour, minute=self.minute, second=self.second,
+            missing_state=self.missing_state, device_id=self.device_id,
         )
 
     async def get_state(self) -> str:

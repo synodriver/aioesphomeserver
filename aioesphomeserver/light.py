@@ -26,11 +26,15 @@ class LightEntity(BasicEntity):
         *args: Any,
         color_modes: Sequence[int] = (LightColorCapability.ON_OFF,),
         effects: Sequence[str] | None = None,
+        min_mireds: float = 0.0,
+        max_mireds: float = 0.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
 
         self.supported_color_modes = color_modes
+        self.min_mireds = float(min_mireds)
+        self.max_mireds = float(max_mireds)
         if effects == None:
             self.effects: Sequence[str] = []
             self.effect = None
@@ -58,10 +62,13 @@ class LightEntity(BasicEntity):
             key=self.key,
             name=self.name,
             supported_color_modes=self.supported_color_modes,
+            min_mireds=self.min_mireds,
+            max_mireds=self.max_mireds,
             effects=self.effects,
             disabled_by_default=self.disabled_by_default,
             icon=self.icon,
             entity_category=self.entity_category,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> LightStateResponse:
@@ -79,6 +86,7 @@ class LightEntity(BasicEntity):
             cold_white=self.cold_white,
             warm_white=self.warm_white,
             effect=self.effect,
+            device_id=self.device_id,
         )
 
     async def state_json(self) -> str:
@@ -135,6 +143,7 @@ class LightEntity(BasicEntity):
         for prop in [
             "state",
             "brightness",
+            "color_mode",
             "white",
             "effect",
             "color_brightness",

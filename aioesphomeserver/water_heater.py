@@ -52,6 +52,8 @@ class WaterHeaterEntity(_StateEntity):
             supported_modes=self.supported_modes,
             supported_features=self.supported_features,
             temperature_unit=self.temperature_unit,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> WaterHeaterStateResponse:
@@ -63,6 +65,8 @@ class WaterHeaterEntity(_StateEntity):
             state=self.state,
             target_temperature_low=self.target_temperature_low,
             target_temperature_high=self.target_temperature_high,
+            device_id=self.device_id,
+            missing_state=self.missing_state,
         )
 
     async def get_state(self) -> float:

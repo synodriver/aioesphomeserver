@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 from aioesphomeapi import APIClient
@@ -17,6 +18,7 @@ from aioesphomeserver import (
     SelectEntity,
     SensorEntity,
 )
+from examples.external_data_entities import update_temperature
 
 
 class RecordingNumber(NumberEntity):
@@ -133,3 +135,51 @@ def test_select_rejects_invalid_configuration():
 
     with pytest.raises(ValueError, match="initial_state"):
         SelectEntity(name="Invalid", options=("auto",), initial_state="eco")
+
+
+def test_external_temperature_clears_missing_state_after_first_read():
+    async def run():
+        sensor = SensorEntity(name="External temperature", missing_state=True)
+        device = Device(name="external-source")
+        device.add_entity(sensor)
+        source = AsyncMock()
+        source.read_temperature.return_value = 23.5
+        task = asyncio.create_task(update_temperature(sensor, source))
+        try:
+            await _wait_for(lambda: not sensor.missing_state)
+            state = await sensor.build_state_response()
+            assert state.state == 23.5
+            assert not state.missing_state
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_first_external_read_publishes_even_if_value_matches_default():
+    async def run():
+        sensor = SensorEntity(name="External temperature", missing_state=True)
+        device = Device(name="external-source")
+        device.add_entity(sensor)
+        source = AsyncMock()
+        source.read_temperature.return_value = 0.0
+        published = []
+        original_publish = device.publish
+
+        async def record_publish(publisher, key, message):
+            if key == "state_change":
+                published.append(message)
+            await original_publish(publisher, key, message)
+
+        device.publish = record_publish
+        task = asyncio.create_task(update_temperature(sensor, source))
+        try:
+            await _wait_for(lambda: bool(published))
+            assert published[0].state == 0.0
+            assert not published[0].missing_state
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())

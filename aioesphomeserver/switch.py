@@ -34,10 +34,14 @@ class SwitchEntity(BasicEntity):
             device_class=self.device_class,
             assumed_state=self.assumed_state,
             disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> SwitchStateResponse:
-        return SwitchStateResponse(key=self.key, state=await self.get_state())
+        return SwitchStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def get_state(self) -> bool:
         return self._state

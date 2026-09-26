@@ -37,10 +37,15 @@ class SensorEntity(BasicEntity):
             state_class=self.state_class,
             disabled_by_default=self.disabled_by_default,
             entity_category=self.entity_category,
+            force_update=False,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> SensorStateResponse:
-        return SensorStateResponse(key=self.key, state=await self.get_state())
+        return SensorStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def state_json(self) -> str:
         state = await self.get_state()

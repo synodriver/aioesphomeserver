@@ -24,11 +24,14 @@ class DateEntity(_StateEntity):
             name=self.name,
             icon=self.icon,
             entity_category=self.entity_category,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> DateStateResponse:
         return DateStateResponse(
-            key=self.key, year=self.year, month=self.month, day=self.day
+            key=self.key, year=self.year, month=self.month, day=self.day,
+            missing_state=self.missing_state, device_id=self.device_id,
         )
 
     async def get_state(self) -> str:

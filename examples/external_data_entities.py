@@ -64,7 +64,13 @@ class OperatingModeSelect(SelectEntity):
 
 async def update_temperature(sensor: SensorEntity, source: ExternalDataSource) -> None:
     while True:
-        await sensor.set_state(await source.read_temperature())
+        value = await source.read_temperature()
+        was_missing = sensor.missing_state
+        previous_value = await sensor.get_state()
+        sensor.missing_state = False
+        await sensor.set_state(value)
+        if was_missing and value == previous_value:
+            await sensor.notify_state_change()
         await asyncio.sleep(10)
 
 
@@ -73,6 +79,7 @@ async def main() -> None:
     temperature = SensorEntity(
         name="External temperature",
         object_id="external_temperature",
+        missing_state=True,
         unit_of_measurement="C",
         accuracy_decimals=1,
         state_class=SensorStateClass.MEASUREMENT,

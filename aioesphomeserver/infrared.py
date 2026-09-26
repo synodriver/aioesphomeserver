@@ -34,6 +34,8 @@ class InfraredEntity(BasicEntity):
             entity_category=self.entity_category,
             capabilities=self.capabilities,
             receiver_frequency=self.receiver_frequency,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def on_transmit(
@@ -72,5 +74,7 @@ class InfraredEntity(BasicEntity):
         if device is None:
             raise RuntimeError("entity is not attached to a device")
         await device.publish(
-            self, "state_change", InfraredRFReceiveEvent(key=self.key, timings=timings)
+            self, "state_change", InfraredRFReceiveEvent(
+                key=self.key, timings=timings, device_id=self.device_id
+            )
         )

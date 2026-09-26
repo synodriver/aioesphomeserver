@@ -10,13 +10,16 @@ __all__ = ["LockEntity"]
 class LockEntity(_StateEntity):
     DOMAIN = "lock"
 
-    def __init__(self, *args: Any, state: int = 0, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, state: int = 0, code: str | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self.state = state
         self.assumed_state = False
         self.supports_open = False
         self.requires_code = False
         self.code_format = ""
+        self.code = code
 
     async def build_list_entities_response(self) -> ListEntitiesLockResponse:
         return ListEntitiesLockResponse(
@@ -29,10 +32,12 @@ class LockEntity(_StateEntity):
             supports_open=self.supports_open,
             requires_code=self.requires_code,
             code_format=self.code_format,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> LockStateResponse:
-        return LockStateResponse(key=self.key, state=self.state)
+        return LockStateResponse(key=self.key, state=self.state, device_id=self.device_id)
 
     async def get_state(self) -> int:
         return self.state
@@ -42,6 +47,12 @@ class LockEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: LockCommandRequest) -> None:
+        if self.requires_code and (
+            not command.has_code
+            or self.code is None
+            or command.code != self.code
+        ):
+            return
         state = {
             LockCommand.UNLOCK: LockState.UNLOCKED,
             LockCommand.LOCK: LockState.LOCKED,

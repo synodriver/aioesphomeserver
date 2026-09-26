@@ -34,6 +34,8 @@ class ValveEntity(_StateEntity):
             assumed_state=self.assumed_state,
             supports_position=self.supports_position,
             supports_stop=self.supports_stop,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> ValveStateResponse:
@@ -41,6 +43,7 @@ class ValveEntity(_StateEntity):
             key=self.key,
             position=self.position,
             current_operation=self.current_operation,
+            device_id=self.device_id,
         )
 
     async def get_state(self) -> float:

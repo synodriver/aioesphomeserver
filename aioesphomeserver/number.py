@@ -46,10 +46,15 @@ class NumberEntity(BasicEntity):
             mode=self.mode,
             disabled_by_default=self.disabled_by_default,
             entity_category=self.entity_category,
+            device_class=self.device_class or "",
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> NumberStateResponse:
-        return NumberStateResponse(key=self.key, state=await self.get_state())
+        return NumberStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def state_json(self) -> str:
         state = await self.get_state()

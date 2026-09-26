@@ -18,6 +18,7 @@ class ButtonEntity(BasicEntity):
             disabled_by_default=bool(getattr(self, "disabled_by_default", False)),
             entity_category=self.entity_category,
             device_class=self.device_class or "",
+            device_id=self.device_id,
         )
 
     async def on_press(self) -> None:

@@ -29,6 +29,8 @@ class UpdateEntity(_StateEntity):
             icon=self.icon,
             entity_category=self.entity_category,
             device_class=self.device_class or "",
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> UpdateStateResponse:
@@ -43,6 +45,7 @@ class UpdateEntity(_StateEntity):
             title=self.title,
             release_summary=self.release_summary,
             release_url=self.release_url,
+            device_id=self.device_id,
         )
 
     async def get_state(self) -> bool:

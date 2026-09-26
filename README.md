@@ -171,7 +171,7 @@ _This is alpha quality at best._ Expect bugs, both striking and subtle. Use at y
 general-purpose host, network isolation or a VPN such as WireGuard/Tailscale can
 still provide useful defense in depth.
 
-See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/homeassistant_actions.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, and `examples/voice_assistant.py`.
+See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/homeassistant_actions.py`, `examples/homeassistant_state_time.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, `examples/serialx_proxy.py`, `examples/zwave_serialx_proxy.py`, and `examples/voice_assistant.py`.
 
 The Bleak proxy example advertises runtime scanning-mode support. On Linux it
 passes BlueZ `or_patterns` for passive scanning and falls back to active

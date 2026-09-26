@@ -20,10 +20,15 @@ class DateTimeEntity(_StateEntity):
             name=self.name,
             icon=self.icon,
             entity_category=self.entity_category,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> DateTimeStateResponse:
-        return DateTimeStateResponse(key=self.key, epoch_seconds=self.epoch_seconds)
+        return DateTimeStateResponse(
+            key=self.key, epoch_seconds=self.epoch_seconds,
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def get_state(self) -> int:
         return self.epoch_seconds

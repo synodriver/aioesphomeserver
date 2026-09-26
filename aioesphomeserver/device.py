@@ -12,7 +12,14 @@ from inspect import getframeinfo, stack
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from aioesphomeapi.api_pb2 import DeviceInfoResponse, HomeassistantActionResponse
+from aioesphomeapi.api_pb2 import (
+    AreaInfo,
+    DeviceInfo,
+    DeviceInfoResponse,
+    GetTimeResponse,
+    HomeAssistantStateResponse,
+    HomeassistantActionResponse,
+)
 from aioesphomeapi.model import BluetoothProxyFeature
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -86,6 +93,8 @@ class Device:
         project_name: str | None = None,
         project_version: str | None = None,
         esphome_version: str = "0.0.1",
+        compilation_time: str = "",
+        has_deep_sleep: bool = False,
         manufacturer: str = "aioesphomeserver",
         friendly_name: str | None = None,
         suggested_area: str | None = None,
@@ -97,6 +106,10 @@ class Device:
         serial_proxies: Sequence[SerialProxy] = (),
         zwave_proxy: ZWaveProxy | None = None,
         encryption_key: str | bytes | None = None,
+        api_outgoing_connection_supported: bool = False,
+        devices: Sequence[DeviceInfo] = (),
+        areas: Sequence[AreaInfo] = (),
+        area: AreaInfo | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
         self.mac_address = mac_address or self._generate_mac_address()
@@ -104,6 +117,8 @@ class Device:
         self.project_name = project_name
         self.project_version = project_version
         self.esphome_version = esphome_version
+        self.compilation_time = compilation_time
+        self.has_deep_sleep = bool(has_deep_sleep)
         self.manufacturer = manufacturer
         self.friendly_name = friendly_name or (name if name != self.name else None)
         self.suggested_area = suggested_area
@@ -120,11 +135,18 @@ class Device:
         for instance, proxy in enumerate(self.serial_proxies):
             proxy.instance = instance
         self.zwave_proxy = zwave_proxy
+        if api_outgoing_connection_supported:
+            raise ValueError("outgoing API connections are not implemented")
+        self.api_outgoing_connection_supported = False
+        self.devices = tuple(devices)
+        self.areas = tuple(areas)
+        self.area = area
         self.encryption_key, self.encryption_key_bytes = _normalize_encryption_key(
             encryption_key
         )
         self.entities: list[BasicEntity] = []
         self.services: list[UserService] = []
+        self._pending_homeassistant_state_subscriptions: dict[tuple[str, str], bool] = {}
         self.zeroconf: AsyncZeroconf | None = None
         self.service_info: ServiceInfo | None = None
         self.running = True
@@ -164,6 +186,8 @@ class Device:
             name=self.name,
             mac_address=self.mac_address,
             esphome_version=self.esphome_version,
+            compilation_time=self.compilation_time,
+            has_deep_sleep=self.has_deep_sleep,
             model=self.model or "Python",
             project_name=project_name,
             project_version=project_version,
@@ -173,7 +197,14 @@ class Device:
             suggested_area=self.suggested_area or "",
             api_encryption_supported=self.encryption_key is not None,
             api_encryption_provisionable=False,
+            api_outgoing_connection_supported=self.api_outgoing_connection_supported,
         )
+        response.devices.extend(self.devices)
+        response.areas.extend(self.areas)
+        if self.area is not None:
+            response.area.CopyFrom(self.area)
+        if self.area is None and self.suggested_area:
+            response.area.CopyFrom(AreaInfo(name=self.suggested_area))
         if self.bluetooth_proxy is not None:
             response.legacy_bluetooth_proxy_version = _legacy_bluetooth_proxy_version(
                 self.bluetooth_proxy.feature_flags
@@ -278,6 +309,36 @@ class Device:
             return None
         return self.entities[key - 1]
 
+    async def subscribe_homeassistant_state(
+        self, entity_id: str, attribute: str = "", once: bool = False
+    ) -> None:
+        """Request a Home Assistant entity state subscription."""
+        if not entity_id:
+            raise ValueError("Home Assistant entity_id cannot be empty")
+        try:
+            server = self._get_native_api_server()
+        except RuntimeError:
+            self._pending_homeassistant_state_subscriptions[(entity_id, attribute)] = once
+        else:
+            await server.send_homeassistant_state_subscription(entity_id, attribute, once)
+
+    async def handle_homeassistant_state(
+        self, response: HomeAssistantStateResponse
+    ) -> None:
+        """Dispatch a state update from Home Assistant to interested entities."""
+        await self.publish(None, "homeassistant_state", response)
+
+    async def request_time(self) -> None:
+        """Request time and timezone from connected Home Assistant clients."""
+        await self._get_native_api_server().request_time()
+
+    async def handle_time_response(self, response: GetTimeResponse) -> None:
+        """Forward the complete response, including parsed timezone rules."""
+        await self.publish(None, "time_response", response)
+
+    async def dump_config(self, client: Any) -> None:
+        """Override to send application configuration log lines to a client."""
+
     def _get_native_api_server(self) -> Any:
         from aioesphomeserver.native_api_server import NativeApiServer
 
@@ -335,6 +396,9 @@ class Device:
 
         api_server = NativeApiServer(name="_server", port=self.api_port)
         self.add_entity(api_server)
+        for (entity_id, attribute), once in self._pending_homeassistant_state_subscriptions.items():
+            await api_server.send_homeassistant_state_subscription(entity_id, attribute, once)
+        self._pending_homeassistant_state_subscriptions.clear()
         if self.web_port is not None:
             self.add_entity(WebServer(name="_web_server", port=self.web_port))
 

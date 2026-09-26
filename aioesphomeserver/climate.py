@@ -47,6 +47,10 @@ class ClimateEntity(BasicEntity):
         visual_max_humidity: float = 100,
         supports_preset: bool = False,
         supported_presets: Sequence[int] | None = None,
+        custom_fan_modes: Sequence[str] | None = None,
+        custom_presets: Sequence[str] | None = None,
+        temperature_unit: int = 0,
+        feature_flags: int = 0,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -70,6 +74,12 @@ class ClimateEntity(BasicEntity):
         self.visual_max_humidity = visual_max_humidity
         self.supports_preset = supports_preset
         self.supported_presets = supported_presets or []
+        self.supported_custom_fan_modes = list(custom_fan_modes or ())
+        self.supported_custom_presets = list(custom_presets or ())
+        self.temperature_unit = temperature_unit
+        self.feature_flags = int(feature_flags)
+        self.custom_fan_mode = ""
+        self.custom_preset = ""
 
         self.mode = self.supported_modes[0]
         if self.supports_two_point_target_temperature:
@@ -122,6 +132,14 @@ class ClimateEntity(BasicEntity):
             visual_max_humidity=self.visual_max_humidity,
             supported_presets=self.supported_presets,
             disabled_by_default=self.disabled_by_default,
+            icon=self.icon or "",
+            entity_category=self.entity_category,
+            supported_custom_fan_modes=self.supported_custom_fan_modes,
+            supported_custom_presets=self.supported_custom_presets,
+            visual_current_temperature_step=0.1,
+            feature_flags=self.feature_flags,
+            temperature_unit=self.temperature_unit,
+            device_id=self.device_id,
         )
         logger.info(f"Building list entities response for {self.object_id}: {response}")
         return response
@@ -152,6 +170,10 @@ class ClimateEntity(BasicEntity):
             swing_mode=self.swing_mode,
             action=self.action,
             preset=self.preset,
+            custom_fan_mode=self.custom_fan_mode,
+            custom_preset=self.custom_preset,
+            device_id=self.device_id,
+            missing_state=self.missing_state,
         )
 
     async def state_json(self) -> str:
@@ -205,6 +227,8 @@ class ClimateEntity(BasicEntity):
             "fan_mode",
             "swing_mode",
             "preset",
+            "custom_fan_mode",
+            "custom_preset",
             "target_humidity",
         ]:
             has_prop = f"has_{prop}"

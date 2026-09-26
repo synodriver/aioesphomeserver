@@ -24,6 +24,8 @@ class BasicEntity:
         device_class: str | None = None,
         entity_category: int | None = None,
         disabled_by_default: bool = False,
+        device_id: int = 0,
+        missing_state: bool = False,
     ) -> None:
         self.name = name
         self._assigned_object_id = object_id
@@ -32,6 +34,10 @@ class BasicEntity:
         self.device_class = device_class
         self.entity_category = entity_category
         self.disabled_by_default = disabled_by_default
+        # ESPHome multi-device nodes use this to associate an entity with a
+        # sub-device.  Zero is the protocol default for single-device nodes.
+        self.device_id = int(device_id)
+        self.missing_state = bool(missing_state)
 
         self.device: Device | None = None
         self.key: int | None = None

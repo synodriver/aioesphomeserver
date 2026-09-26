@@ -22,6 +22,8 @@ class CameraEntity(BasicEntity):
             name=self.name,
             icon=self.icon,
             entity_category=self.entity_category,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def on_request(self, single: bool, stream: bool) -> None:
@@ -46,6 +48,7 @@ class CameraEntity(BasicEntity):
                 self,
                 "state_change",
                 CameraImageResponse(
-                    key=self.key, data=chunk, done=done if is_last else False
+                    key=self.key, data=chunk, done=done if is_last else False,
+                    device_id=self.device_id,
                 ),
             )

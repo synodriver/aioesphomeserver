@@ -12,6 +12,7 @@ from aioesphomeapi import (
     ClimateSwingMode,
     LightColorCapability,
 )
+from aioesphomeapi.api_pb2 import AreaInfo, DeviceInfo
 from aioesphomeapi.model import (
     AlarmControlPanelState,
     CoverOperation,
@@ -129,6 +130,9 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
         esphome_version="1145.1.4",
         project_name="aioesphomeserver.entity-showcase",
         project_version="1.0.0",
+        area=AreaInfo(area_id=1, name="Office"),
+        areas=(AreaInfo(area_id=1, name="Office"),),
+        devices=(DeviceInfo(device_id=1, name="Room module", area_id=1),),
     )
 
     entities: dict[str, BasicEntity] = {}
@@ -167,6 +171,7 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
                 ClimateFanMode.LOW,
                 ClimateFanMode.HIGH,
             ),
+            custom_fan_modes=("silent",),
             supports_swing_mode=True,
             supported_swing_modes=(ClimateSwingMode.OFF, ClimateSwingMode.VERTICAL),
             supports_action=True,
@@ -176,6 +181,8 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
                 ClimatePreset.ECO,
                 ClimatePreset.COMFORT,
             ),
+            custom_presets=("boost",),
+            temperature_unit=TemperatureUnit.CELSIUS,
             visual_min_temperature=16.0,
             visual_max_temperature=30.0,
             visual_target_temperature_step=0.5,
@@ -239,7 +246,11 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
                 LightColorCapability.ON_OFF
                 | LightColorCapability.BRIGHTNESS
                 | LightColorCapability.RGB,
+                LightColorCapability.BRIGHTNESS
+                | LightColorCapability.COLOR_TEMPERATURE,
             ),
+            min_mireds=153.0,
+            max_mireds=500.0,
             effects=("reading", "relax"),
         ),
     )
@@ -296,6 +307,7 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
         SensorEntity(
             name="Temperature",
             object_id="temperature",
+            device_id=1,
             unit_of_measurement="C",
             accuracy_decimals=1,
             state_class=SensorStateClass.MEASUREMENT,

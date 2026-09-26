@@ -48,6 +48,8 @@ class FanEntity(_StateEntity):
             icon=self.icon,
             entity_category=self.entity_category,
             supported_preset_modes=self.supported_preset_modes,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> FanStateResponse:
@@ -59,6 +61,7 @@ class FanEntity(_StateEntity):
             direction=self.direction,
             speed_level=self.speed_level,
             preset_mode=self.preset_mode,
+            device_id=self.device_id,
         )
 
     async def get_state(self) -> bool:

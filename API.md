@@ -64,9 +64,9 @@ await device.run(api_port=6053, web_port=None)
 
 配置密钥后，mDNS 会发布 `api_encryption=Noise_NNpsk0_25519_ChaChaPoly_SHA256`，Native API 只接受使用同一密钥的 Noise 连接；Home Assistant 添加设备时需要填写相同密钥。未配置密钥时继续使用明文协议。
 
-当前实现是启动时固定 PSK，不处理 `NoiseEncryptionSetKeyRequest`，也不把自己声明为可在线配网（`api_encryption_provisionable=false`）。修改密钥后必须同步更新 Home Assistant 中的配置。密钥不应写入日志或提交到公开仓库。
+当前实现是启动时固定 PSK；收到 `NoiseEncryptionSetKeyRequest` 会明确返回 `success=false`，并声明 `api_encryption_provisionable=false`。修改密钥后必须同步更新 Home Assistant 中的配置。密钥不应写入日志或提交到公开仓库。
 
-服务端响应 API 版本 `1.18`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 `aioesphomeapi 46.5.0`，此版本已包含官方设备能力 protobuf 类。
+服务端响应 API 版本 `1.18`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 Python 3.12 环境的 `aioesphomeapi 46.6.0`。
 
 Native API 单帧 payload 最大为 `65535` 字节，varuint 最多 4 字节；服务端默认接受最多 6 个并发客户端，并要求明文客户端在 60 秒内发送首个消息。超过限制或发送错误前导的连接会被关闭，入站日志只记录 protobuf 消息类型，不记录参数和二进制 payload。
 
@@ -321,3 +321,15 @@ D:\conda\envs\hass\python.exe -m examples.zwave_serialx_proxy COM4
 ```
 
 Linux 上将 `COM3`、`COM4` 替换为实际设备路径。串口示例收到客户端配置后重开串口以应用波特率、校验位、停止位、数据位和硬件流控；Z-Wave 示例按 Serial API 帧边界转发，并查询 Home ID。无硬件测试使用模拟 `serialx` 端口，不验证目标串口或控制器的实际行为。
+
+## 46.6.0 协议字段
+
+所有实体发现消息可通过 `device_id` 关联 `Device(devices=[DeviceInfo(...)], areas=[AreaInfo(...)])` 中的子设备和区域。`Device(area=...)` 设置主区域；仅未设置 `area` 时才以 `suggested_area` 构造区域信息。实体可设置 `disabled_by_default`；Switch、Climate、Water Heater 可设置 `missing_state`。Climate 支持自定义风速和预设、温度单位及功能标志；Light 可设置 `min_mireds`、`max_mireds`。
+
+`await device.subscribe_homeassistant_state("sensor.example", attribute="", once=False)` 注册 Home Assistant 状态订阅。注册可早于客户端连接，后续客户端订阅时仍会收到请求。响应作为 `homeassistant_state` 事件发送给设备实体，内容为完整的 `HomeAssistantStateResponse`；`once=True` 在收到首个匹配响应后移除。`await device.request_time()` 向已连接客户端发送 `GetTimeRequest`，收到的完整 `GetTimeResponse`（包括 `parsed_timezone` 和 DST 规则）作为 `time_response` 事件传给实体。示例见 `examples/homeassistant_state_time.py`。
+
+`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。可运行 `D:\conda\envs\hass\python.exe tools\proto_audit.py` 查看全部 177 个消息类型和 870 个字段的直接引用及待人工核对项。
+
+日志订阅遵循客户端请求的 `level`，级别为 0 时取消该连接的日志推送。请求 `dump_config` 时调用 `Device.dump_config(client)`，应用可覆写并通过 `await client.log(level, text)` 发送安全的配置摘要；默认实现不输出配置。
+
+默认 Alarm 和 Lock 实体仅在声明需要密码时检查传入命令的密码；应用应提供 `code="..."`，否则不会执行需密码的命令。自定义后端可覆写 `on_command()` 接入自己的密码校验；`code_format` 仅是 Lock 的界面格式提示。

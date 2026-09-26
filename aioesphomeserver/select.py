@@ -41,10 +41,14 @@ class SelectEntity(BasicEntity):
             options=self.options,
             disabled_by_default=self.disabled_by_default,
             entity_category=self.entity_category,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> SelectStateResponse:
-        return SelectStateResponse(key=self.key, state=await self.get_state())
+        return SelectStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def state_json(self) -> str:
         return json.dumps(

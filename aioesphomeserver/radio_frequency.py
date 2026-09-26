@@ -33,4 +33,6 @@ class RadioFrequencyEntity(InfraredEntity):
             frequency_min=self.frequency_min,
             frequency_max=self.frequency_max,
             supported_modulations=self.supported_modulations,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )

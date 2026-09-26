@@ -27,10 +27,15 @@ class BinarySensorEntity(BasicEntity):
             icon=self.icon,
             disabled_by_default=self.disabled_by_default,
             entity_category=self.entity_category,
+            is_status_binary_sensor=False,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> BinarySensorStateResponse:
-        return BinarySensorStateResponse(key=self.key, state=await self.get_state())
+        return BinarySensorStateResponse(
+            key=self.key, state=await self.get_state(),
+            missing_state=self.missing_state, device_id=self.device_id,
+        )
 
     async def state_json(self) -> str:
         state = await self.get_state()

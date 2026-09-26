@@ -17,6 +17,7 @@ class AlarmControlPanelEntity(_StateEntity):
         supported_features: int = 0,
         requires_code: bool = False,
         requires_code_to_arm: bool = False,
+        code: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -24,6 +25,7 @@ class AlarmControlPanelEntity(_StateEntity):
         self.supported_features = supported_features
         self.requires_code = requires_code
         self.requires_code_to_arm = requires_code_to_arm
+        self.code = code
 
     async def build_list_entities_response(
         self,
@@ -37,10 +39,14 @@ class AlarmControlPanelEntity(_StateEntity):
             supported_features=self.supported_features,
             requires_code=self.requires_code,
             requires_code_to_arm=self.requires_code_to_arm,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> AlarmControlPanelStateResponse:
-        return AlarmControlPanelStateResponse(key=self.key, state=self.state)
+        return AlarmControlPanelStateResponse(
+            key=self.key, state=self.state, device_id=self.device_id
+        )
 
     async def get_state(self) -> int:
         return self.state
@@ -50,6 +56,18 @@ class AlarmControlPanelEntity(_StateEntity):
         await self._publish_state()
 
     async def on_command(self, command: AlarmControlPanelCommandRequest) -> None:
+        is_arm_command = command.command in (
+            AlarmControlPanelCommand.ARM_AWAY,
+            AlarmControlPanelCommand.ARM_HOME,
+            AlarmControlPanelCommand.ARM_NIGHT,
+            AlarmControlPanelCommand.ARM_VACATION,
+            AlarmControlPanelCommand.ARM_CUSTOM_BYPASS,
+        )
+        if (
+            (command.command == AlarmControlPanelCommand.DISARM and self.requires_code)
+            or (is_arm_command and self.requires_code_to_arm)
+        ) and (self.code is None or command.code != self.code):
+            return
         state = {
             AlarmControlPanelCommand.DISARM: AlarmControlPanelState.DISARMED,
             AlarmControlPanelCommand.ARM_AWAY: AlarmControlPanelState.ARMED_AWAY,

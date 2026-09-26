@@ -37,11 +37,14 @@ class MediaPlayerEntity(_StateEntity):
             supports_pause=True,
             supported_formats=self.supported_formats,
             feature_flags=self.feature_flags,
+            disabled_by_default=self.disabled_by_default,
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> MediaPlayerStateResponse:
         return MediaPlayerStateResponse(
-            key=self.key, state=self.state, volume=self.volume, muted=self.muted
+            key=self.key, state=self.state, volume=self.volume, muted=self.muted,
+            device_id=self.device_id,
         )
 
     async def get_state(self) -> int:
@@ -73,6 +76,28 @@ class MediaPlayerEntity(_StateEntity):
             elif command.command == MediaPlayerCommand.UNMUTE:
                 self.muted = False
                 changed = True
+            elif command.command == MediaPlayerCommand.TOGGLE:
+                self.state = (
+                    MediaPlayerState.OFF
+                    if self.state != MediaPlayerState.OFF
+                    else MediaPlayerState.ON
+                )
+                changed = True
+            elif command.command == MediaPlayerCommand.VOLUME_UP:
+                self.volume = min(1.0, self.volume + 0.1)
+                changed = True
+            elif command.command == MediaPlayerCommand.VOLUME_DOWN:
+                self.volume = max(0.0, self.volume - 0.1)
+                changed = True
+        # URL and announcement are transport hints for the application
+        # backend.  Keep them available to subclasses without prescribing a
+        # media implementation.
+        if command.has_media_url:
+            self.media_url = command.media_url
+            changed = True
+        if command.has_announcement:
+            self.announcement = command.announcement
+            changed = True
         if changed:
             await self._publish_state()
 

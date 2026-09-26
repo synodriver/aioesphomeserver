@@ -22,10 +22,14 @@ class TextSensorEntity(_StateEntity):
             disabled_by_default=bool(getattr(self, "disabled_by_default", False)),
             entity_category=self.entity_category,
             device_class=self.device_class or "",
+            device_id=self.device_id,
         )
 
     async def build_state_response(self) -> TextSensorStateResponse:
-        return TextSensorStateResponse(key=self.key, state=await self.get_state())
+        return TextSensorStateResponse(
+            key=self.key, state=await self.get_state(), device_id=self.device_id,
+            missing_state=self.missing_state,
+        )
 
     async def get_state(self) -> str:
         return self._state
