@@ -318,7 +318,20 @@ class BluetoothProxy:
 
     async def publish_disconnect(self, address: int, error: int = 0) -> None:
         """Report an unsolicited backend disconnection to the owning client."""
+        client = self._release_connection(address)
+        await self._send_disconnect_response(address, client, error)
+
+    def _release_connection(self, address: int) -> NativeApiConnection | None:
+        """Release backend ownership before scheduling a disconnect response."""
         client = self._connection_owners.pop(address, None)
+        for key in tuple(self._notification_owners):
+            if key[0] == address:
+                del self._notification_owners[key]
+        return client
+
+    async def _send_disconnect_response(
+        self, address: int, client: NativeApiConnection | None, error: int = 0
+    ) -> None:
         if client is not None:
             await client.write_message(
                 BluetoothDeviceConnectionResponse(
@@ -419,17 +432,27 @@ class BluetoothProxy:
             BluetoothDeviceRequestType.CONNECT_V3_WITH_CACHE,
             BluetoothDeviceRequestType.CONNECT_V3_WITHOUT_CACHE,
         ):
-            if (
-                message.address not in self._connection_owners
-                and len(self._connection_owners) >= self.max_connections
-            ):
+            if message.address in self._connection_owners:
+                # The address is already connected, or a connection attempt is
+                # in flight; connecting again would leak the earlier handle.
                 await client.write_message(
                     BluetoothDeviceConnectionResponse(
                         address=message.address, connected=False, error=GATT_ERROR
                     )
                 )
                 return
+            if len(self._connection_owners) >= self.max_connections:
+                await client.write_message(
+                    BluetoothDeviceConnectionResponse(
+                        address=message.address, connected=False, error=GATT_ERROR
+                    )
+                )
+                return
+            # Reserve the slot before awaiting the backend so that concurrent
+            # requests cannot oversubscribe max_connections.
+            self._connection_owners[message.address] = client
             try:
+                await self._send_connections_free()
                 address_type = (
                     message.address_type if message.has_address_type else 0
                 )
@@ -438,21 +461,46 @@ class BluetoothProxy:
                     address_type,
                     request_type == BluetoothDeviceRequestType.CONNECT_V3_WITH_CACHE,
                 )
+            except asyncio.CancelledError:
+                # Keep the slot reserved until partial backend cleanup ends.
+                try:
+                    await self.disconnect(message.address)
+                except BaseException:
+                    logger.debug(
+                        "Bluetooth cleanup after cancelled connection failed",
+                        exc_info=True,
+                    )
+                finally:
+                    self._release_connection(message.address)
+                try:
+                    await self._send_connections_free()
+                except Exception:
+                    logger.debug("Bluetooth slot update failed", exc_info=True)
+                raise
             except BluetoothProxyError as error:
+                self._connection_owners.pop(message.address, None)
                 await client.write_message(
                     BluetoothDeviceConnectionResponse(
                         address=message.address, connected=False, error=error.error
                     )
                 )
+                await self._send_connections_free()
                 return
             except Exception:
+                self._connection_owners.pop(message.address, None)
                 logger.exception("Bluetooth connection failed")
                 await client.write_message(
                     BluetoothDeviceConnectionResponse(
                         address=message.address, connected=False, error=GATT_ERROR
                     )
                 )
+                await self._send_connections_free()
                 return
+            except BaseException:
+                # A cancelled request must not keep the reserved slot.
+                self._connection_owners.pop(message.address, None)
+                raise
+            # The backend connection is live now; keep the slot reserved.
             self._connection_owners[message.address] = client
             await client.write_message(
                 BluetoothDeviceConnectionResponse(

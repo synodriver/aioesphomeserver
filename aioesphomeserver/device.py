@@ -449,6 +449,7 @@ class Device:
         await self.unregister_zeroconf()
 
     async def register_zeroconf(self, port: int) -> AsyncZeroconf | None:
+        zeroconf: AsyncZeroconf | None = None
         try:
             zeroconf = AsyncZeroconf()
             service_type = "_esphomelib._tcp.local."
@@ -490,7 +491,24 @@ class Device:
             return zeroconf
         except Exception as e:
             logger.error(f"Error registering zeroconf: {e}", exc_info=True)
+            await self._close_zeroconf(zeroconf)
             return None
+        except BaseException:
+            await self._close_zeroconf(zeroconf)
+            raise
+
+    async def _close_zeroconf(self, zeroconf: AsyncZeroconf | None) -> None:
+        """Release a discovery instance that never became the device's."""
+        self.service_info = None
+        if zeroconf is None:
+            return
+        try:
+            await zeroconf.async_close()
+        except Exception:
+            logger.debug(
+                "Failed to close zeroconf after a failed registration",
+                exc_info=True,
+            )
 
     async def unregister_zeroconf(self) -> None:
         if self.zeroconf and self.service_info:

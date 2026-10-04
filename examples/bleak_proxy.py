@@ -34,11 +34,13 @@ from bleak.backends.scanner import AdvertisementData
 
 import aioesphomeserver
 from aioesphomeserver import (
+    GATT_ERROR,
     BluetoothAdvertisement,
     BluetoothGATTCharacteristic,
     BluetoothGATTDescriptor,
     BluetoothGATTService,
     BluetoothProxy,
+    BluetoothProxyError,
     Device,
     SensorEntity,
     TextSensorEntity,
@@ -82,7 +84,9 @@ class BleakBluetoothProxy(BluetoothProxy):
         super().__init__(**kwargs)
         self._bluez_adapter = bluez_adapter
         self._clients: dict[int, BleakClient] = {}
+        self._connecting_addresses: set[int] = set()
         self._scanner: BleakScanner | None = None
+        self._disconnect_tasks: set[asyncio.Task[None]] = set()
 
     def _scanner_for_mode(
         self,
@@ -157,10 +161,63 @@ class BleakBluetoothProxy(BluetoothProxy):
         bluez: Any = (
             {"adapter": self._bluez_adapter} if self._bluez_adapter is not None else {}
         )
-        client = BleakClient(bluetooth_address_to_str(address), bluez=bluez)
-        await client.connect()
+        client = BleakClient(
+            bluetooth_address_to_str(address),
+            bluez=bluez,
+            disconnected_callback=self._on_disconnected,
+        )
+        # Register before the handshake so a disconnect callback that fires
+        # while it runs can find and drop this client.
         self._clients[address] = client
+        self._connecting_addresses.add(address)
+        try:
+            await client.connect()
+        except BaseException:
+            if self._clients.get(address) is client:
+                del self._clients[address]
+            with suppress(Exception):
+                await client.disconnect()
+            raise
+        finally:
+            self._connecting_addresses.discard(address)
+        if self._clients.get(address) is not client or not client.is_connected:
+            # The peripheral dropped the link while the handshake ran.
+            if self._clients.get(address) is client:
+                del self._clients[address]
+            with suppress(Exception):
+                await client.disconnect()
+            raise BluetoothProxyError(GATT_ERROR, "disconnected during connect")
         return client.mtu_size
+
+    def _on_disconnected(self, client: BleakClient) -> None:
+        """Reclaim the connection slot when the peripheral drops the link."""
+        for address, known in tuple(self._clients.items()):
+            if known is client:
+                del self._clients[address]
+                break
+        else:
+            return
+        if address in self._connecting_addresses:
+            # The pending connect request will report failure and release the
+            # slot once its backend handshake finishes.
+            return
+        owner = self._release_connection(address)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug("Bleak client disconnected after the event loop stopped")
+            return
+        task = loop.create_task(self._send_disconnect_response(address, owner))
+        self._disconnect_tasks.add(task)
+        task.add_done_callback(self._disconnect_done)
+
+    def _disconnect_done(self, task: asyncio.Task[None]) -> None:
+        self._disconnect_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error(
+                "Could not report a Bluetooth disconnect",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def disconnect(self, address: int) -> None:
         client = self._clients.pop(address, None)

@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
+from contextlib import suppress
 
 from aioesphomeapi.api_pb2 import SerialProxyConfigureRequest, SerialProxyIdentity
 from aioesphomeapi.model import SerialProxyStatus
@@ -55,8 +56,13 @@ class SerialxProxy(SerialProxy):
             byte_size=self.data_size,
             rtscts=self.flow_control,
         )
-        await serial.open()
         self._serial = serial
+        try:
+            await serial.open()
+        except BaseException:
+            with suppress(Exception):
+                await self.on_unsubscribe()
+            raise
         self._reader_task = asyncio.create_task(self._read_loop(serial))
 
     async def on_unsubscribe(self) -> None:
