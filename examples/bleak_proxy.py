@@ -127,23 +127,28 @@ class BleakBluetoothProxy(BluetoothProxy):
         scanner = self._scanner_for_mode(active, on_detection)
         self._scanner = scanner
         try:
-            await scanner.start()
-        except BleakError:
-            if active:
-                self._scanner = None
-                raise
-            logger.warning(
-                "Passive BLE scanning is unavailable; falling back to active "
-                "scanning. On Linux, enable BlueZ experimental features to "
-                "use passive mode.",
-                exc_info=True,
-            )
+            try:
+                await scanner.start()
+            except BleakError:
+                if active:
+                    raise
+                logger.warning(
+                    "Passive BLE scanning is unavailable; falling back to active "
+                    "scanning. On Linux, enable BlueZ experimental features to "
+                    "use passive mode.",
+                    exc_info=True,
+                )
+                with suppress(Exception):
+                    await scanner.stop()
+                scanner = self._scanner_for_mode(True, on_detection)
+                self._scanner = scanner
+                await scanner.start()
+                self._set_actual_scan_mode(True)
+        except BaseException:
+            self._scanner = None
             with suppress(Exception):
                 await scanner.stop()
-            scanner = self._scanner_for_mode(True, on_detection)
-            self._scanner = scanner
-            await scanner.start()
-            self._set_actual_scan_mode(True)
+            raise
 
     async def stop_scan(self) -> None:
         scanner, self._scanner = self._scanner, None

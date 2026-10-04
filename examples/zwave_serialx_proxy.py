@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from contextlib import suppress
 
 from serialx import AsyncSerial, async_serial_for_url
 
@@ -36,8 +37,13 @@ class SerialxZWaveProxy(ZWaveProxy):
 
     async def on_subscribe(self) -> None:
         serial = async_serial_for_url(self.port, baudrate=self.baudrate)
-        await serial.open()
         self._serial = serial
+        try:
+            await serial.open()
+        except BaseException:
+            with suppress(Exception):
+                await self.on_unsubscribe()
+            raise
         self._reader_task = asyncio.create_task(self._read_loop(serial))
         self._query_task = asyncio.create_task(self._query_home_id(serial))
 

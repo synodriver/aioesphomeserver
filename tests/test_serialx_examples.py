@@ -126,7 +126,10 @@ def test_serialx_proxy_reconfigures_and_forwards_data(monkeypatch: Any) -> None:
 
 
 @pytest.mark.parametrize("cancel", [False, True], ids=["failure", "cancel"])
-def test_serialx_open_failure_closes_partial_port(monkeypatch: Any, cancel: bool) -> None:
+@pytest.mark.parametrize("zwave", [False, True], ids=["uart", "zwave"])
+def test_serialx_open_failure_closes_partial_port(
+    monkeypatch: Any, cancel: bool, zwave: bool
+) -> None:
     class PartialPort(FakePort):
         def __init__(self) -> None:
             super().__init__("COM3")
@@ -142,10 +145,14 @@ def test_serialx_open_failure_closes_partial_port(monkeypatch: Any, cancel: bool
 
     async def run() -> None:
         port = PartialPort()
+        module = zwave_serialx_proxy if zwave else serialx_proxy
         monkeypatch.setattr(
-            serialx_proxy, "async_serial_for_url", lambda _url, **_options: port
+            module, "async_serial_for_url", lambda _url, **_options: port
         )
-        proxy = serialx_proxy.SerialxProxy("COM3")
+        proxy = (
+            zwave_serialx_proxy.SerialxZWaveProxy("COM3")
+            if zwave else serialx_proxy.SerialxProxy("COM3")
+        )
         task = asyncio.create_task(proxy.on_subscribe())
         try:
             async with asyncio.timeout(2):
@@ -158,6 +165,8 @@ def test_serialx_open_failure_closes_partial_port(monkeypatch: Any, cancel: bool
             assert port.closed
             assert proxy._serial is None
             assert proxy._reader_task is None
+            if isinstance(proxy, zwave_serialx_proxy.SerialxZWaveProxy):
+                assert proxy._query_task is None
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

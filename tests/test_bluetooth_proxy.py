@@ -519,6 +519,63 @@ def test_bleak_example_passive_scan_uses_bluez_patterns_and_falls_back() -> None
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("mode", ["active", "passive", "fallback"])
+@pytest.mark.parametrize("cancel", [False, True], ids=["failure", "cancel"])
+def test_bleak_example_scanner_start_failure_closes_backend(
+    mode: str, cancel: bool
+) -> None:
+    pytest.importorskip("bleak")
+    from bleak import BleakError
+    from examples.bleak_proxy import BleakBluetoothProxy
+
+    backend_error = BleakError if mode == "active" else RuntimeError
+
+    class PartialScanner:
+        instances: list["PartialScanner"] = []
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.started = asyncio.Event()
+            self.stopped = False
+            self.instances.append(self)
+
+        async def start(self) -> None:
+            if mode == "fallback" and self is self.instances[0]:
+                raise BleakError("passive scanning unavailable")
+            self.started.set()
+            if cancel:
+                await asyncio.Event().wait()
+            else:
+                raise backend_error("scanner partially started")
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+    async def run() -> None:
+        proxy = BleakBluetoothProxy()
+        with patch("examples.bleak_proxy.BleakScanner", PartialScanner):
+            task = asyncio.create_task(proxy.start_scan(mode == "active"))
+            try:
+                async with asyncio.timeout(2):
+                    while (
+                        not PartialScanner.instances
+                        or not PartialScanner.instances[-1].started.is_set()
+                    ):
+                        await asyncio.sleep(0)
+                if cancel:
+                    task.cancel()
+                expected_error = asyncio.CancelledError if cancel else backend_error
+                with pytest.raises(expected_error):
+                    await task
+                assert len(PartialScanner.instances) == (2 if mode == "fallback" else 1)
+                assert all(scanner.stopped for scanner in PartialScanner.instances)
+                assert proxy._scanner is None
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
 def test_bleak_example_reports_backend_disconnects() -> None:
     pytest.importorskip("bleak")
 
