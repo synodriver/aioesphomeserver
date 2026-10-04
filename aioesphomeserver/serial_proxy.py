@@ -119,6 +119,15 @@ class SerialProxy:
                         try:
                             await self.on_subscribe()
                         except BaseException:
+                            # Close partially opened ports without replacing
+                            # the original failure or cancellation.
+                            try:
+                                await self.on_unsubscribe()
+                            except BaseException:
+                                logger.debug(
+                                    "Serial cleanup after failed subscription failed",
+                                    exc_info=True,
+                                )
                             self.owner = None
                             raise
                 elif kind == SerialProxyRequestType.UNSUBSCRIBE:

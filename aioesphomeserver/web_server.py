@@ -62,11 +62,13 @@ class WebServer(BasicEntity):
                     if state is not None:
                         await resp.send(state, event="state")
 
-                while resp.is_connected():
+                while resp.is_connected() and not self._shutdown.is_set():
                     try:
                         event, payload = await asyncio.wait_for(queue.get(), timeout=1)
                     except asyncio.TimeoutError:
                         event, payload = "ping", ""
+                    if event == "shutdown":
+                        break
                     if event == "log":
                         payload = payload[1]
 
@@ -83,6 +85,7 @@ class WebServer(BasicEntity):
         device = self.device
         if device is None:
             raise RuntimeError("web server is not attached to a device")
+        self._shutdown.clear()
         app = web.Application()
         app.router.add_route("GET", "/events", self.events)
         app.router.add_route("GET", "/", self.index)
@@ -103,8 +106,11 @@ class WebServer(BasicEntity):
 
             await self._shutdown.wait()
         finally:
+            self._shutdown.set()
+            self._broadcast(("shutdown", ""))
             self._runner = None
             await runner.cleanup()
 
     async def stop(self) -> None:
         self._shutdown.set()
+        self._broadcast(("shutdown", ""))

@@ -93,6 +93,31 @@ Voice Assistant 等需要独立后端的功能仍分别见对应专项示例。
 
 所有接收 Home Assistant 控制请求的实体都暴露异步 `on_command()`，应用可覆写它执行真实设备操作。Button 还保留语义更明确的 `on_press()`，Camera 保留 `on_request()`，Infrared/RF 保留 `on_transmit()`；它们默认由 `on_command()` 转发，既能统一覆写，也兼容专用钩子。Sensor、Binary Sensor、Text Sensor 和 Event 在 ESPHome 协议中没有 HA 到设备的命令消息，因此不需要 `on_command()`。
 
+### 灯光颜色模式
+
+`LightEntity.color_modes` 使用 `aioesphomeapi.ColorMode`，例如：
+
+```python
+from aioesphomeapi import ColorMode
+from aioesphomeserver import LightEntity
+
+light = LightEntity(
+    name="Desk light",
+    color_modes=(ColorMode.RGB, ColorMode.COLOR_TEMPERATURE),
+)
+```
+
+序列至少包含一个模式。旧版 `LightColorCapability` 表示单项能力位，不应直接写入
+`supported_color_modes`；现在会明确拒绝这类枚举，包括与 `ColorMode` 数值重叠的成员。
+已有调用方应将能力组合改为对应的模式，例如 RGBW 使用 `ColorMode.RGB_WHITE`，
+仅调光使用 `ColorMode.BRIGHTNESS`。默认模式为 `ColorMode.ON_OFF`。
+
+### Web Server 关闭
+
+`WebServer` 向每个 `/events` 连接独立推送状态、日志和空闲心跳。没有订阅者时不会积压事件。
+调用 `await web_server.stop()` 后还应等待 `run()` 任务退出；停止或取消该任务会结束活跃的
+SSE 连接并清理 HTTP runner。设备重启服务时可再次调用同一实例的 `run()`。
+
 ## 外部数据和自定义命令
 
 `SensorEntity.set_state()` 可用于定期发布 HTTP、数据库、串口或其他外部数据源的值。`NumberEntity` 和 `SelectEntity` 收到 Home Assistant 命令时会调用异步 `on_command(value)`；应用可继承实体，在钩子中执行外部操作，并在操作成功后调用 `set_state(value)` 将最终状态回推给 Home Assistant。
@@ -311,6 +336,9 @@ device = Device(
 ```
 
 串口后端还可覆盖 `on_subscribe()`、`on_unsubscribe()`、`on_set_modem_pins()`、`on_get_modem_pins()`、`on_set_mode()`；不支持的操作默认返回 `NOT_SUPPORTED`。主动调用 `publish_identity()` 会更新已订阅客户端的串口身份。Z-Wave 后端调用 `publish_home_id()` 报告 Home ID 变化。未订阅的客户端不能写串口或 Z-Wave 帧，也不能配置串口；第二个订阅者收到 `PORT_IN_USE` 或 `IN_USE`。红外/RF 发送命令结束后，服务端会向发起方发送 `InfraredRFTransmitCompleteResponse`，使新版客户端能按实际完成时间发送下一帧。
+
+订阅过程开始前会预占串口。`on_subscribe()` 失败或被取消时，库会调用 `on_unsubscribe()`
+清理可能已打开的后端，再释放 owner；因此关闭钩子应能处理端口尚未完全打开的情况。
 
 真实串口接入见 `examples/serialx_proxy.py`，Z-Wave Serial API 控制器接入见
 `examples/zwave_serialx_proxy.py`。两者都使用 `serialx` 异步端口，需要 Python 3.12 环境和本机串口设备；本库将其列为可选的 `serial` 依赖组。示例命令：

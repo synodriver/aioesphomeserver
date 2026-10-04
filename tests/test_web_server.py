@@ -73,7 +73,8 @@ async def _running_dashboard() -> AsyncIterator[tuple[Device, SensorEntity, str]
 def test_every_open_dashboard_receives_state_and_log_events():
     async def run() -> None:
         async with _running_dashboard() as (device, sensor, url):
-            async with aiohttp.ClientSession() as session:
+            connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(url) as first, session.get(url) as second:
                     await sensor.set_state(12.5)
                     for response in (first, second):
@@ -95,7 +96,8 @@ def test_every_open_dashboard_receives_state_and_log_events():
 def test_idle_stream_gets_keepalives_and_the_next_stream_starts_fresh():
     async def run() -> None:
         async with _running_dashboard() as (_device, _sensor, url):
-            async with aiohttp.ClientSession() as session:
+            connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(url) as first:
                     # An idle dashboard still receives keepalives; this is what
                     # drives the heartbeat in the page.
@@ -116,7 +118,8 @@ def test_stop_serves_the_page_and_releases_the_port():
     async def run() -> None:
         device, _sensor, web_server, port, task = await _start_dashboard()
         try:
-            async with aiohttp.ClientSession() as session:
+            connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(f"http://127.0.0.1:{port}/") as response:
                     assert response.status == 200
                     assert "esp-app" in await response.text()
@@ -125,7 +128,8 @@ def test_stop_serves_the_page_and_releases_the_port():
             await asyncio.wait_for(task, timeout=5)
 
             with pytest.raises(aiohttp.ClientError):
-                async with aiohttp.ClientSession() as session:
+                connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+                async with aiohttp.ClientSession(connector=connector) as session:
                     async with session.get(f"http://127.0.0.1:{port}/"):
                         pass
         finally:
