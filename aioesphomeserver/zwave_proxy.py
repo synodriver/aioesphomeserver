@@ -69,8 +69,19 @@ class ZWaveProxy:
                 if self.owner is not None and self.owner is not client:
                     status = ZWaveProxyStatus.IN_USE
                 elif self.owner is None:
-                    await self.on_subscribe()
                     self.owner = client
+                    try:
+                        await self.on_subscribe()
+                    except BaseException:
+                        try:
+                            await self.on_unsubscribe()
+                        except BaseException:
+                            logger.debug(
+                                "Z-Wave cleanup after failed subscription failed",
+                                exc_info=True,
+                            )
+                        self.owner = None
+                        raise
             elif message.type == ZWaveProxyRequestType.UNSUBSCRIBE:
                 if self.owner is client:
                     await self.on_unsubscribe()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from aioesphomeapi.api_pb2 import AuthenticationRequest  # type: ignore
@@ -125,14 +125,17 @@ class NativeApiConnection:
                     await self._perform_noise_handshake(
                         device.encryption_key_bytes
                     )
-            first_message = True
-            while self.running:
-                if first_message and self._noise is None:
-                    async with asyncio.timeout(CLIENT_HELLO_TIMEOUT):
-                        message = await self.read_next_message()
-                else:
+            async with asyncio.timeout(CLIENT_HELLO_TIMEOUT):
+                while self.running:
                     message = await self.read_next_message()
-                first_message = False
+                    if message is None:
+                        continue
+                    if type(message) is not HelloRequest:
+                        raise NativeApiProtocolError("expected native API HelloRequest")
+                    await self.handle_message(message)
+                    break
+            while self.running:
+                message = await self.read_next_message()
                 if message is not None:
                     await self.handle_message(message)
         except (
@@ -191,7 +194,7 @@ class NativeApiConnection:
             self._service_tasks.add(task)
             task.add_done_callback(self._service_tasks.discard)
         elif type(message) is HomeassistantActionResponse:
-            self.server.handle_homeassistant_action_response(message)
+            self.server.handle_homeassistant_action_response(self, message)
         elif type(message) is HomeAssistantStateResponse:
             await self.server.handle_homeassistant_state_response(message)
         else:
@@ -240,34 +243,36 @@ class NativeApiConnection:
             )
 
         payload = message.SerializeToString()
-        if self._noise is None:
-            if len(payload) > MAX_MESSAGE_SIZE:
-                raise NativeApiProtocolError(
-                    f"native API message is too large: {len(payload)} bytes"
-                )
-            frame = b"".join(
-                (
-                    b"\0",
-                    _varuint_to_bytes(len(payload)),
-                    _varuint_to_bytes(message_type),
-                    payload,
-                )
-            )
-        else:
-            if len(payload) > MAX_NOISE_FRAME_SIZE - 20:
-                raise ValueError(
-                    f"native API message is too large for Noise: {len(payload)} bytes"
-                )
-            plaintext = b"".join(
-                (
-                    message_type.to_bytes(2, "big"),
-                    len(payload).to_bytes(2, "big"),
-                    payload,
-                )
-            )
-            encrypted = self._noise.encrypt(plaintext)
-            frame = b"\x01" + len(encrypted).to_bytes(2, "big") + encrypted
         async with self._write_lock:
+            if not self.running:
+                return
+            if self._noise is None:
+                if len(payload) > MAX_MESSAGE_SIZE:
+                    raise NativeApiProtocolError(
+                        f"native API message is too large: {len(payload)} bytes"
+                    )
+                frame = b"".join(
+                    (
+                        b"\0",
+                        _varuint_to_bytes(len(payload)),
+                        _varuint_to_bytes(message_type),
+                        payload,
+                    )
+                )
+            else:
+                if len(payload) > MAX_NOISE_FRAME_SIZE - 20:
+                    raise ValueError(
+                        f"native API message is too large for Noise: {len(payload)} bytes"
+                    )
+                plaintext = b"".join(
+                    (
+                        message_type.to_bytes(2, "big"),
+                        len(payload).to_bytes(2, "big"),
+                        payload,
+                    )
+                )
+                encrypted = self._noise.encrypt(plaintext)
+                frame = b"\x01" + len(encrypted).to_bytes(2, "big") + encrypted
             self.writer.write(frame)
             await self.writer.drain()
 
@@ -433,9 +438,23 @@ class NativeApiServer(BasicEntity):
         await self._started.wait()
 
     async def log(self, message: str) -> None:
-        for client in tuple(self._clients):
-            if client.subscribe_to_logs:
-                await client.log(3, message)
+        await self.handle("log", (3, message))
+
+    async def _broadcast_message(
+        self, clients: Iterable[NativeApiConnection], message: Message
+    ) -> None:
+        active_clients = tuple(client for client in clients if client.running)
+        results = await asyncio.gather(
+            *(client.write_message(message) for client in active_clients),
+            return_exceptions=True,
+        )
+        # Keep cleanup in the caller: stop() may cancel a service task that is
+        # awaiting this broadcast, so workers must not await that task.
+        for client, result in zip(active_clients, results):
+            if isinstance(result, (ConnectionError, OSError)):
+                await client.stop(wait_closed=False)
+            elif isinstance(result, BaseException):
+                raise result
 
     async def handle_client(
         self, reader: "StreamReader", writer: "StreamWriter"
@@ -649,8 +668,7 @@ class NativeApiServer(BasicEntity):
             self._homeassistant_action_clients[call_id] = set(subscribers)
 
         try:
-            sent = 0
-            for client in subscribers:
+            async def send_to_client(client: NativeApiConnection) -> bool:
                 try:
                     await client.write_message(request)
                 except (ConnectionError, OSError, NativeApiProtocolError) as err:
@@ -660,8 +678,17 @@ class NativeApiServer(BasicEntity):
                         err,
                     )
                     self._remove_homeassistant_action_client(client)
-                else:
-                    sent += 1
+                    return False
+                return True
+
+            send_results = await asyncio.gather(
+                *(send_to_client(client) for client in subscribers),
+                return_exceptions=True,
+            )
+            for result in send_results:
+                if isinstance(result, BaseException):
+                    raise result
+            sent = sum(result is True for result in send_results)
             if sent == 0:
                 if future is not None:
                     raise RuntimeError(
@@ -679,6 +706,10 @@ class NativeApiServer(BasicEntity):
             if future is not None:
                 self._homeassistant_action_futures.pop(request.call_id, None)
                 self._homeassistant_action_clients.pop(request.call_id, None)
+                if not future.done():
+                    future.cancel()
+                elif not future.cancelled():
+                    future.exception()
 
     async def send_homeassistant_state_subscription(
         self, entity_id: str, attribute: str = "", once: bool = False
@@ -693,15 +724,11 @@ class NativeApiServer(BasicEntity):
         request = SubscribeHomeAssistantStateResponse(
             entity_id=entity_id, attribute=attribute, once=once
         )
-        for client in tuple(self._homeassistant_state_clients):
-            if client.running:
-                await client.write_message(request)
+        await self._broadcast_message(self._homeassistant_state_clients, request)
 
     async def request_time(self) -> None:
         """Ask connected clients for their clock and timezone."""
-        for client in tuple(self._clients):
-            if client.running:
-                await client.write_message(GetTimeRequest())
+        await self._broadcast_message(self._clients, GetTimeRequest())
 
     async def handle_homeassistant_state_response(
         self, response: HomeAssistantStateResponse
@@ -720,8 +747,10 @@ class NativeApiServer(BasicEntity):
         await client.write_message(NoiseEncryptionSetKeyResponse(success=False))
 
     def handle_homeassistant_action_response(
-        self, response: HomeassistantActionResponse
+        self, client: NativeApiConnection, response: HomeassistantActionResponse
     ) -> None:
+        if client not in self._homeassistant_action_clients.get(response.call_id, ()):
+            return
         future = self._homeassistant_action_futures.get(response.call_id)
         if future is not None and not future.done():
             future.set_result(response)
@@ -769,14 +798,19 @@ class NativeApiServer(BasicEntity):
 
     async def handle(self, key: str, message: Any) -> None:
         if key == "state_change":
-            for client in tuple(self._clients):
-                if client.subscribe_to_states:
-                    await client.write_message(message)
+            await self._broadcast_message(
+                (client for client in self._clients if client.subscribe_to_states),
+                message,
+            )
         elif key == "log":
             level, text = message
-            for client in tuple(self._clients):
-                if client.subscribe_to_logs:
-                    await client.log(level, text)
+            await self._broadcast_message(
+                (
+                    client for client in self._clients
+                    if client.subscribe_to_logs and level <= client.log_level
+                ),
+                SubscribeLogsResponse(level=level, message=text.encode("utf-8")),
+            )
 
     async def stop(self) -> None:
         self._fail_homeassistant_actions("Native API server stopped")

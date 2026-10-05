@@ -251,8 +251,6 @@ class VoiceAssistant:
         finally:
             if self._start_future is future:
                 self._start_future = None
-        self._pipeline_active = True
-        self._stream_port = port
         return port
 
     async def send_audio(self, data: bytes, data2: bytes | None = None) -> None:
@@ -444,6 +442,8 @@ class VoiceAssistant:
                 VoiceAssistantStartError("Assist pipeline failed to start")
             )
         else:
+            self._pipeline_active = True
+            self._stream_port = message.port
             future.set_result(message.port)
 
     async def _handle_configuration_request(
