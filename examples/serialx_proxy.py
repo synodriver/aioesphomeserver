@@ -3,6 +3,13 @@
 Run with Python 3.12 and serialx installed:
     python -m examples.serialx_proxy COM3
     python -m examples.serialx_proxy /dev/ttyUSB0
+
+Supply identity=SerialProxyIdentity(source=SerialProxyIdentitySource.USB,
+    flags=SerialProxyIdentityFlag.CONNECTED,
+    usb=UsbDeviceDescriptor(vendor_id=..., product_id=..., interface_number=...,
+                            interface_class=..., port_number=...))
+only with descriptors obtained from the actual USB device. No USB identity is
+inferred from the port name; CONFIGURED (1) is reserved by the upstream protocol.
 """
 
 from __future__ import annotations
@@ -32,11 +39,14 @@ def device_mac(port: str) -> str:
 class SerialxProxy(SerialProxy):
     """Forward raw UART bytes between serialx and one Native API subscriber."""
 
-    def __init__(self, port: str, baudrate: int = 115200) -> None:
+    def __init__(
+        self, port: str, baudrate: int = 115200, *,
+        identity: SerialProxyIdentity | None = None,
+    ) -> None:
         super().__init__(
             port,
             configured_line_states=3,
-            identity=SerialProxyIdentity(source=1, product=port),
+            identity=identity if identity is not None else SerialProxyIdentity(),
         )
         self.port = port
         self.baudrate = baudrate

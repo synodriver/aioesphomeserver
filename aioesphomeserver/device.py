@@ -33,7 +33,10 @@ if TYPE_CHECKING:
     from aioesphomeserver.bluetooth_proxy import BluetoothProxy
     from aioesphomeserver.services import ServiceArgType, ServiceArgument, UserService
     from aioesphomeserver.serial_proxy import SerialProxy
+    from aioesphomeserver.sendspin import SendspinProvider
+    from aioesphomeserver.stored_yaml import StoredYaml
     from aioesphomeserver.voice_assistant import VoiceAssistant
+    from aioesphomeserver.wizard import OnboardingWizard
     from aioesphomeserver.zwave_proxy import ZWaveProxy
 
 logger = logging.getLogger(__name__)
@@ -110,6 +113,9 @@ class Device:
         devices: Sequence[DeviceInfo] = (),
         areas: Sequence[AreaInfo] = (),
         area: AreaInfo | None = None,
+        wizard: OnboardingWizard | None = None,
+        sendspin: SendspinProvider | None = None,
+        stored_yaml: StoredYaml | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
         self.mac_address = mac_address or self._generate_mac_address()
@@ -144,6 +150,12 @@ class Device:
         self.encryption_key, self.encryption_key_bytes = _normalize_encryption_key(
             encryption_key
         )
+        self.wizard = wizard
+        self.sendspin = sendspin
+        self.stored_yaml = stored_yaml
+        if (stored_yaml is not None and not stored_yaml.allow_unencrypted
+            and self.encryption_key_bytes is None):
+            raise ValueError("stored YAML requires encryption_key or allow_unencrypted=True")
         self.entities: list[BasicEntity] = []
         self.services: list[UserService] = []
         self._pending_homeassistant_state_subscriptions: dict[tuple[str, str], bool] = {}
@@ -236,6 +248,13 @@ class Device:
         if self.zwave_proxy is not None:
             response.zwave_proxy.feature_flags = self.zwave_proxy.feature_flags
             response.zwave_proxy.home_id = self.zwave_proxy.home_id
+        if self.wizard is not None:
+            response.wizard.configured = True
+        if self.sendspin is not None:
+            response.sendspin.feature_flags = self.sendspin.feature_flags
+            response.sendspin.client_id = self.sendspin.client_id
+        if self.stored_yaml is not None:
+            response.store_yaml.supported = True
         response.serial_proxies.extend(proxy.info() for proxy in self.serial_proxies)
         return response
 
@@ -305,9 +324,10 @@ class Device:
         return None
 
     def get_entity_by_key(self, key: int) -> BasicEntity | None:
-        if key <= 0 or key > len(self.entities):
-            return None
-        return self.entities[key - 1]
+        for entity in self.entities:
+            if entity.key == key:
+                return entity
+        return None
 
     async def subscribe_homeassistant_state(
         self, entity_id: str, attribute: str = "", once: bool = False

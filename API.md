@@ -66,7 +66,7 @@ await device.run(api_port=6053, web_port=None)
 
 当前实现是启动时固定 PSK；收到 `NoiseEncryptionSetKeyRequest` 会明确返回 `success=false`，并声明 `api_encryption_provisionable=false`。修改密钥后必须同步更新 Home Assistant 中的配置。密钥不应写入日志或提交到公开仓库。
 
-服务端响应 API 版本 `1.18`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 Python 3.12 环境的 `aioesphomeapi 46.6.0`。
+服务端响应 API 版本 `1.19`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 Python 3.12 环境的 `aioesphomeapi 46.23.0`。
 
 Native API 单帧 payload 最大为 `65535` 字节，varuint 最多 4 字节；服务端默认接受最多 6 个并发客户端，并要求明文客户端在 60 秒内发送首个消息。超过限制或发送错误前导的连接会被关闭，入站日志只记录 protobuf 消息类型，不记录参数和二进制 payload。
 
@@ -356,7 +356,113 @@ Linux 上将 `COM3`、`COM4` 替换为实际设备路径。串口示例收到客
 
 `await device.subscribe_homeassistant_state("sensor.example", attribute="", once=False)` 注册 Home Assistant 状态订阅。注册可早于客户端连接，后续客户端订阅时仍会收到请求。响应作为 `homeassistant_state` 事件发送给设备实体，内容为完整的 `HomeAssistantStateResponse`；`once=True` 在收到首个匹配响应后移除。`await device.request_time()` 向已连接客户端发送 `GetTimeRequest`，收到的完整 `GetTimeResponse`（包括 `parsed_timezone` 和 DST 规则）作为 `time_response` 事件传给实体。示例见 `examples/homeassistant_state_time.py`。
 
-`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。可运行 `D:\conda\envs\hass\python.exe tools\proto_audit.py` 查看全部 177 个消息类型和 870 个字段的直接引用及待人工核对项。
+`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。46.23.0 的协议共 187 个消息类型、895 个字段，本轮新增类型和字段的实现及验证见 [AUDIT_46_23.md](AUDIT_46_23.md)。
+
+## 46.23.0 新能力
+
+### 设备向导
+
+`Device(wizard=OnboardingWizard(pages))` 启用 `wizard.configured`，并响应
+`DeviceWizardRequest`（156）/`DeviceWizardResponse`（157）。`pages` 使用官方模型
+`WizardPage`、`WizardEntityField`、`WizardInputField`、`WizardEntityFilter`，支持标题、说明、
+本机实体、子设备 ID、单选/多选输入和实体过滤器；翻译占位符原样发送。
+向导编码为版本 1 JSON 的单个 zstd frame，构造时检查客户端 1 MiB 解压限制；完整 protobuf
+响应最多 65515 字节，为 Noise 元数据和认证标签预留 20 字节，明文连接使用同一上限。
+
+```python
+from aioesphomeserver import OnboardingWizard, WizardPage
+
+key = OnboardingWizard.input_key("selected_calendars")
+wizard = OnboardingWizard([WizardPage.from_dict({
+    "title": "选择日历",
+    "inputs": [{"key": key, "multiple": True, "max_length": 1023,
+                "entity_filters": [{"domain": ["calendar"]}]}],
+})])
+device = Device(name="wizard-demo", wizard=wizard)
+```
+
+`WizardInputSetRequest`（158）的 key 是输入 ESPHome id 的 FNV-1 hash，与实体发现 key 不同。
+库忽略未知 key 和非法输入；每个实体 ID 要包含 `.`，UTF-8 长度不超过 255 字节。
+多选使用逗号分隔，去除每个 ID 两侧空白，按规范化后的字节长度检查 `max_length`（默认 255，
+上限 4095），任一项为空或非法则忽略整个请求。服务端不校验 HA 实体是否存在或是否满足 UI 过滤器。
+
+选择值可通过只读快照 `wizard.selections` 获取，只存 RAM，不做持久化；客户端应在每次重连后、
+订阅 HA 状态前重发。继承并覆写 `async on_input(key, entity_ids: tuple[str, ...])` 接入应用，
+仅在规范化后的选择变化时调用，回调成功后才记录选择；失败或取消后可重试同一选择。
+同一输入 key 的回调互斥执行。连接内向导输入、配对令牌请求及随后到达的 HA 状态订阅
+按接收顺序在后台处理，慢回调不会阻塞 Ping；断开时取消未完成回调并丢弃排队请求。
+如果连接仍在运行而后端等待的内部任务被取消，服务端会关闭该连接并清理队列，
+客户端重连后应重发配置，避免后续订阅使用未完成的配置。
+最多允许 64 个待处理请求，超限断开连接。默认是独立输入存储；HA platform 的状态订阅与旧绑定的替换
+由应用回调负责，不会仅因配置了过滤器就自动创建 HA 实体订阅。
+
+### Sendspin 配对令牌
+
+`Device(sendspin=SendspinProvider(...))` 发布 `sendspin.feature_flags` 和 `client_id`。
+`client_id` 为 Sendspin 静态公钥的 43 字符 base64url 标识，后端未启动时可为空。
+默认声明 `SendspinFeature.PAIRING_TOKEN`；继承并覆写
+`async on_pairing_token() -> aioesphomeapi.model.SendspinPairingTokenResponse`：
+
+```python
+from aioesphomeapi.model import SendspinPairingTokenResponse, SendspinPairingTokenStatus
+from aioesphomeserver import SendspinProvider
+
+class MySendspin(SendspinProvider):
+    async def on_pairing_token(self) -> SendspinPairingTokenResponse:
+        return SendspinPairingTokenResponse.from_dict({
+            "status": SendspinPairingTokenStatus.NOT_READY,
+        })
+```
+
+库处理请求（159）与响应（160），支持 `NOT_READY`、`OK`、`ENCRYPTION_REQUIRED`、
+`DISABLED`、`FAILED` 全部状态。仅设备已配置 PSK 且当前连接实际使用 Noise 时才调用后端；
+明文连接返回 `ENCRYPTION_REQUIRED`。仅 `OK` 状态携带 token，其余状态强制清空；后端异常返回
+`FAILED`，不记录异常文本，防止异常中包含令牌。令牌是长期秘密，应用也不要打印或记录。
+基类默认 `NOT_READY`；本库提供协议后端接口，不包含 Sendspin 音频客户端实现。
+
+### YAML 导出
+
+```python
+from aioesphomeserver import StoredYaml
+
+device = Device(
+    name="yaml-demo",
+    encryption_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    stored_yaml=StoredYaml({
+        "device.yaml": "esphome:\n  name: yaml-demo\n",
+        "packages/sensors.yaml": "sensor: []\n",
+    }),
+)
+```
+
+`StoredYaml(files, allow_unencrypted=False, chunk_size=1024)` 显式接收相对路径到文本或 bytes 的映射。
+只导出给定文件，不扫描磁盘，也不自动脱敏；请自行筛选内容。路径禁止绝对路径和 `..`。
+默认要求 `Device.encryption_key`；确有需要可显式传 `allow_unencrypted=True`。
+
+`store_yaml.supported` 为真时响应 `GetYamlRequest`（161）。文件按 EHY1 envelope 编码后 zstd
+压缩，通过 `GetYamlResponse`（162）分片传输：只有首块设置压缩总字节数 `total_size`，
+只有末块 `done=True`。EHY1 格式为 magic `EHY1`、小端 uint32 文件数量；每个文件依次为
+小端 uint16 路径 UTF-8 字节数、路径、小端 uint32 内容字节数、内容。
+每连接独立传输，传输中重复请求忽略，写入遵循 backpressure，断线取消，不阻塞 Ping。
+46.23.0 官方客户端尚无 `get_yaml()` 高层方法，示例使用连接的消息收集接口。
+
+完整服务端及官方客户端示例：
+
+```powershell
+D:\conda\envs\hass\python.exe -m examples.device_setup
+# 另一个终端：
+D:\conda\envs\hass\python.exe -m examples.check_device_setup_client
+```
+
+### 现有功能的新字段
+
+| 类型 | 使用方式 |
+| --- | --- |
+| 服务参数 | `ServiceArgument(type, description="", example="", optional=False, default_value="")`。默认值始终为字符串，如 `"true"`、`"0.6"`；空串表示无默认值。两字段仅为发现元数据，wire 调用仍须传入每个位置参数，服务端不自动补值。见 `examples/custom_services.py`。 |
+| Cover | `CoverEntity(..., supports_tilt=True, supports_stop_tilt=True, supports_toggle=True)` 发布新能力。`stop_tilt` 调用可覆写的 `on_stop_tilt()`，保持倾角不变；默认钩子无硬件动作，接入电机时须覆写。`toggle` 调用 `on_toggle()`，默认在运动中停止，静止且关闭时打开，其余位置关闭；硬件可覆写控制逻辑。见 `examples/entity_showcase.py`。 |
+| 子设备 | `DeviceInfo(relation=DeviceRelation.CHILD)` 表示同一物理设备的子设备；默认 `VIA` 为独立设备经本机中转。直接保留官方 protobuf 字段。见 `examples/entity_showcase.py`。 |
+| 媒体格式 | `MediaPlayerSupportedFormat(..., bitrate=192)`，单位 kbps，0 表示无偏好；通过 `MediaPlayerEntity(supported_formats=...)` 传入。见 `examples/entity_showcase.py`。 |
+| USB 描述 | `UsbDeviceDescriptor(interface_class=..., port_number=...)` 通过 `SerialProxyIdentity.usb` 保留。`examples/serialx_proxy.py` 接受显式 `identity=`，仅在取得真实 USB 描述时设置 `source=USB`；默认 `NONE`，不再使用上游标为保留的 `CONFIGURED` 值。 |
 
 日志订阅遵循客户端请求的 `level`，级别为 0 时取消该连接的日志推送。请求 `dump_config` 时调用 `Device.dump_config(client)`，应用可覆写并通过 `await client.log(level, text)` 发送安全的配置摘要；默认实现不输出配置。
 

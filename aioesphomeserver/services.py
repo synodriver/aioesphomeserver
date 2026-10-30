@@ -52,6 +52,8 @@ class ServiceArgument:
     type: ServiceArgType | type[Any]
     description: str = ""
     example: str = ""
+    optional: bool = False
+    default_value: str = ""
 
 
 ServiceArgumentSpec = Mapping[str, ServiceArgType | type[Any] | ServiceArgument]
@@ -154,7 +156,7 @@ class UserService:
     supports_response: SupportsResponseType | str | int = SupportsResponseType.NONE
     description: str = ""
     key: int = field(init=False)
-    _arguments: tuple[tuple[str, ServiceArgType, str, str], ...] = field(
+    _arguments: tuple[tuple[str, ServiceArgType, str, str, bool, str], ...] = field(
         init=False, repr=False
     )
 
@@ -168,13 +170,18 @@ class UserService:
         arguments = []
         for name, spec in (self.arguments or {}).items():
             if isinstance(spec, ServiceArgument):
-                if not isinstance(spec.description, str) or not isinstance(spec.example, str):
+                if not all(isinstance(value, str) for value in (
+                    spec.description, spec.example, spec.default_value,
+                )):
                     raise TypeError("service argument metadata must be strings")
+                if not isinstance(spec.optional, bool):
+                    raise TypeError("service argument optional must be a bool")
                 arguments.append(
-                    (name, _argument_type(spec.type), spec.description, spec.example)
+                    (name, _argument_type(spec.type), spec.description, spec.example,
+                     spec.optional, spec.default_value)
                 )
             else:
-                arguments.append((name, _argument_type(spec), "", ""))
+                arguments.append((name, _argument_type(spec), "", "", False, ""))
         self._arguments = tuple(arguments)
         if len({name for name, *_ in self._arguments}) != len(self._arguments):
             raise ValueError("service argument names must be unique")
@@ -183,7 +190,7 @@ class UserService:
 
     @property
     def argument_types(self) -> tuple[tuple[str, ServiceArgType], ...]:
-        return tuple((name, arg_type) for name, arg_type, _, _ in self._arguments)
+        return tuple((name, arg_type) for name, arg_type, *_ in self._arguments)
 
     def list_entities_response(self) -> ListEntitiesServicesResponse:
         response = ListEntitiesServicesResponse(
@@ -192,12 +199,14 @@ class UserService:
             supports_response=int(self.supports_response),
             description=self.description,
         )
-        for name, arg_type, description, example in self._arguments:
+        for name, arg_type, description, example, optional, default_value in self._arguments:
             argument = response.args.add()
             argument.name = name
             argument.type = int(arg_type)
             argument.description = description
             argument.example = example
+            argument.optional = optional
+            argument.default_value = default_value
         return response
 
     def should_respond(self, request: ExecuteServiceRequest) -> bool:
@@ -210,7 +219,7 @@ class UserService:
             return
         values = [
             _decode_argument(arg, arg_type)
-            for arg, (_, arg_type, _, _) in zip(request.args, self._arguments)
+            for arg, (_, arg_type, *_) in zip(request.args, self._arguments)
         ]
         response: ExecuteServiceResponse | None = None
         try:

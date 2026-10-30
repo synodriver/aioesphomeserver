@@ -12,10 +12,11 @@ from aioesphomeapi import (
     ClimateSwingMode,
     ColorMode,
 )
-from aioesphomeapi.api_pb2 import AreaInfo, DeviceInfo
+from aioesphomeapi.api_pb2 import AreaInfo, DeviceInfo, MediaPlayerSupportedFormat
 from aioesphomeapi.model import (
     AlarmControlPanelState,
     CoverOperation,
+    DeviceRelation,
     EntityCategory,
     FanDirection,
     FanSpeed,
@@ -64,6 +65,11 @@ from examples.camera import ExampleCamera
 class DemoButton(ButtonEntity):
     async def on_press(self) -> None:
         print("Button pressed: refresh data")
+
+
+class DemoCover(CoverEntity):
+    async def on_stop_tilt(self) -> None:
+        print("Stop tilt motor at", self.tilt)
 
 
 class ShowcaseCamera(ExampleCamera):
@@ -132,7 +138,9 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
         project_version="1.0.0",
         area=AreaInfo(area_id=1, name="Office"),
         areas=(AreaInfo(area_id=1, name="Office"),),
-        devices=(DeviceInfo(device_id=1, name="Room module", area_id=1),),
+        devices=(DeviceInfo(
+            device_id=1, name="Room module", area_id=1, relation=DeviceRelation.CHILD,
+        ),),
     )
 
     entities: dict[str, BasicEntity] = {}
@@ -190,11 +198,14 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
     )
     add(
         "cover",
-        CoverEntity(
+        DemoCover(
             name="Window shade",
             object_id="window_shade",
             position=0.5,
             current_operation=CoverOperation.IDLE,
+            supports_toggle=True,
+            supports_tilt=True,
+            supports_stop_tilt=True,
         ),
     )
     add(
@@ -265,6 +276,9 @@ def build_device() -> tuple[Device, dict[str, BasicEntity]]:
             name="Kitchen speaker",
             object_id="kitchen_speaker",
             state=MediaPlayerState.IDLE,
+            supported_formats=(MediaPlayerSupportedFormat(
+                format="mp3", sample_rate=48000, num_channels=2, bitrate=192,
+            ),),
         ),
     )
     add(

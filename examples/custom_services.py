@@ -37,7 +37,11 @@ async def main() -> None:
         description="Select a scene and set its brightness.",
         arguments={
             "scene": ServiceArgument(str, "Scene name", "evening"),
-            "brightness": ServiceArgument(float, "Brightness from 0 to 1", "0.6"),
+            # Discovery metadata: clients still send a positional value on the wire.
+            "brightness": ServiceArgument(
+                float, "Brightness from 0 to 1", "0.6",
+                optional=True, default_value="0.6",
+            ),
         },
     )
     device.add_service("notify", app.notify, arguments={"message": str})

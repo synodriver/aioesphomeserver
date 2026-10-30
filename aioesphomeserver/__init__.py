@@ -27,8 +27,10 @@ from aioesphomeserver.select import *
 from aioesphomeserver.serial_proxy import *
 from aioesphomeserver.sensor import *
 from aioesphomeserver.services import *
+from aioesphomeserver.sendspin import *
 from aioesphomeserver.siren import *
 from aioesphomeserver.switch import *
+from aioesphomeserver.stored_yaml import *
 from aioesphomeserver.text import *
 from aioesphomeserver.text_sensor import *
 from aioesphomeserver.time import *
@@ -37,4 +39,5 @@ from aioesphomeserver.valve import *
 from aioesphomeserver.voice_assistant import *
 from aioesphomeserver.water_heater import *
 from aioesphomeserver.web_server import *
+from aioesphomeserver.wizard import *
 from aioesphomeserver.zwave_proxy import *

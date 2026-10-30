@@ -185,14 +185,15 @@ class BleakBluetoothProxy(BluetoothProxy):
             raise
         finally:
             self._connecting_addresses.discard(address)
-        if self._clients.get(address) is not client or not client.is_connected:
+        connected_client = self._clients.get(address)
+        if connected_client is None or connected_client is not client or not connected_client.is_connected:
             # The peripheral dropped the link while the handshake ran.
             if self._clients.get(address) is client:
                 del self._clients[address]
             with suppress(Exception):
                 await client.disconnect()
             raise BluetoothProxyError(GATT_ERROR, "disconnected during connect")
-        return client.mtu_size
+        return connected_client.mtu_size
 
     def _on_disconnected(self, client: BleakClient) -> None:
         """Reclaim the connection slot when the peripheral drops the link."""

@@ -81,7 +81,7 @@ async def _test_official_client_new_proxy_features() -> None:
             await client.connect()
             clients.append(client)
         owner, other = clients
-        assert owner.api_version == APIVersion(1, 18)
+        assert owner.api_version == APIVersion(1, 19)
         info = await owner.device_info()
         caps = await owner.device_capabilities()
         assert info.serial_proxies[0].name == caps.serial_proxies[0].name == "Test UART"

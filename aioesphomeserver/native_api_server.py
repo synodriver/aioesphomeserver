@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from aioesphomeapi.api_pb2 import AuthenticationRequest  # type: ignore
 from aioesphomeapi.api_pb2 import AuthenticationResponse  # type: ignore
 from aioesphomeapi.api_pb2 import DeviceInfoRequest  # type: ignore
+from aioesphomeapi.api_pb2 import DeviceWizardRequest, WizardInputSetRequest
+from aioesphomeapi.api_pb2 import SendspinPairingTokenRequest, SendspinPairingTokenResponse
+from aioesphomeapi.api_pb2 import GetYamlRequest
 from aioesphomeapi.api_pb2 import DisconnectRequest  # type: ignore
 from aioesphomeapi.api_pb2 import DisconnectResponse  # type: ignore
 from aioesphomeapi.api_pb2 import GetTimeRequest  # type: ignore
@@ -43,7 +47,10 @@ from aioesphomeapi.api_pb2 import SerialProxySetModemPinsRequest  # type: ignore
 from aioesphomeapi.api_pb2 import SerialProxyWriteRequest  # type: ignore
 from aioesphomeapi.api_pb2 import ZWaveProxyFrame  # type: ignore
 from aioesphomeapi.api_pb2 import ZWaveProxyRequest  # type: ignore
-from aioesphomeapi.model import SerialProxyRequestType, SerialProxyStatus
+from aioesphomeapi.model import (
+    SerialProxyRequestType, SerialProxyStatus, SendspinFeature,
+    SendspinPairingTokenStatus,
+)
 from aioesphomeapi.core import MESSAGE_TYPE_TO_PROTO
 from noise.connection import NoiseConnection
 from noise.exceptions import NoiseInvalidMessage
@@ -59,7 +66,7 @@ if TYPE_CHECKING:
     from aioesphomeserver.device import Device
 
 API_VERSION_MAJOR = 1
-API_VERSION_MINOR = 18
+API_VERSION_MINOR = 19
 # ESPHome's native API uses a uint16 length on the wire.  Keep the plaintext
 # path aligned with the Noise path and the official Python client.
 MAX_MESSAGE_SIZE = 65535
@@ -68,6 +75,7 @@ NOISE_HANDSHAKE_TIMEOUT = 10
 CLIENT_HELLO_TIMEOUT = 60
 HOMEASSISTANT_ACTION_TIMEOUT = 30.0
 DEFAULT_MAX_CONNECTIONS = 6
+MAX_PENDING_SETUP_REQUESTS = 64
 NOISE_PROTOCOL_NAME = b"Noise_NNpsk0_25519_ChaChaPoly_SHA256"
 NOISE_PROLOGUE = b"NoiseAPIInit"
 PROTO_TO_MESSAGE_TYPE = {
@@ -116,6 +124,34 @@ class NativeApiConnection:
         self._write_lock = asyncio.Lock()
         self._noise: NoiseConnection | None = None
         self._service_tasks: set[asyncio.Task[None]] = set()
+        self._yaml_task: asyncio.Task[None] | None = None
+        self._setup_task: asyncio.Task[None] | None = None
+        self._setup_queue: deque[Message] = deque()
+
+    def queue_setup_request(self, message: Message) -> None:
+        """Order backend setup and dependent subscriptions without blocking Ping."""
+        if len(self._setup_queue) >= MAX_PENDING_SETUP_REQUESTS:
+            raise NativeApiProtocolError("too many pending setup requests")
+        self._setup_queue.append(message)
+        if self._setup_task is None or self._setup_task.done():
+            self._setup_task = asyncio.create_task(self._run_setup_requests())
+            self._setup_task.add_done_callback(self._setup_finished)
+
+    async def _run_setup_requests(self) -> None:
+        while self.running and self._setup_queue:
+            await self.server.handle_client_request(self, self._setup_queue.popleft())
+
+    def _setup_finished(self, task: asyncio.Task[None]) -> None:
+        if self._setup_task is task:
+            self._setup_task = None
+        # stop() marks the connection stopped before cancelling the worker.
+        # Cancellation while still running can come from an awaited backend
+        # task; close so pending setup cannot silently stall or be skipped.
+        failed = self.running if task.cancelled() else task.exception() is not None
+        if failed:
+            # Backend errors may contain credentials; only report the failure.
+            logger.debug("Native API setup request failed")
+            self.writer.close()
 
     async def start(self) -> None:
         try:
@@ -364,6 +400,16 @@ class NativeApiConnection:
         if not self.running and self.writer.is_closing():
             return
         self.running = False
+        if self._setup_task is not None:
+            if self._setup_task is not asyncio.current_task():
+                self._setup_task.cancel()
+                await asyncio.gather(self._setup_task, return_exceptions=True)
+            self._setup_task = None
+        self._setup_queue.clear()
+        if self._yaml_task is not None:
+            self._yaml_task.cancel()
+            await asyncio.gather(self._yaml_task, return_exceptions=True)
+            self._yaml_task = None
         if self._service_tasks:
             for task in self._service_tasks:
                 task.cancel()
@@ -492,6 +538,13 @@ class NativeApiServer(BasicEntity):
     async def handle_client_request(
         self, client: NativeApiConnection, message: "Message"
     ) -> None:
+        if asyncio.current_task() is not client._setup_task and (
+            type(message) in (WizardInputSetRequest, SendspinPairingTokenRequest)
+            or (type(message) is SubscribeHomeAssistantStatesRequest
+                and client._setup_task is not None and not client._setup_task.done())
+        ):
+            client.queue_setup_request(message)
+            return
         if type(message) is SubscribeHomeassistantServicesRequest:
             client.subscribe_to_homeassistant_services = True
             return
@@ -517,6 +570,49 @@ class NativeApiServer(BasicEntity):
             await client.write_message(
                 await self.attached_device.build_device_capabilities_response()
             )
+            return
+
+        if type(message) is DeviceWizardRequest:
+            if (wizard := self.attached_device.wizard) is not None:
+                await client.write_message(wizard.response())
+            return
+        if type(message) is WizardInputSetRequest:
+            if (wizard := self.attached_device.wizard) is not None:
+                try:
+                    await wizard.handle_input(message)
+                except Exception:
+                    logger.exception("Wizard input handler failed for key %s", message.key)
+            return
+        if type(message) is SendspinPairingTokenRequest:
+            provider = self.attached_device.sendspin
+            if provider is None or not provider.feature_flags & SendspinFeature.PAIRING_TOKEN:
+                return
+            status = SendspinPairingTokenStatus.ENCRYPTION_REQUIRED
+            token = ""
+            if client._noise is not None and self.attached_device.encryption_key_bytes is not None:
+                try:
+                    result = await provider.on_pairing_token()
+                    status = result.status or SendspinPairingTokenStatus.NOT_READY
+                    if status == SendspinPairingTokenStatus.OK:
+                        token = result.token
+                except Exception:
+                    # Backend exceptions may contain the token; do not log their text.
+                    logger.error("Sendspin pairing token backend failed")
+                    status = SendspinPairingTokenStatus.FAILED
+            await client.write_message(SendspinPairingTokenResponse(status=status, token=token))
+            return
+        if type(message) is GetYamlRequest:
+            stored_yaml = self.attached_device.stored_yaml
+            if stored_yaml is not None and (
+                stored_yaml.allow_unencrypted or (
+                    client._noise is not None
+                    and self.attached_device.encryption_key_bytes is not None
+                )
+            ) and (client._yaml_task is None or client._yaml_task.done()):
+                client._yaml_task = asyncio.create_task(stored_yaml.send(client))
+                client._yaml_task.add_done_callback(
+                    lambda task: self._yaml_transfer_done(client, task)
+                )
             return
 
         if type(message) is SubscribeSerialProxyIdentityRequest:
@@ -567,7 +663,7 @@ class NativeApiServer(BasicEntity):
 
             success = False
             entity = self.attached_device.get_entity_by_key(message.key)
-            if isinstance(entity, InfraredEntity):
+            if isinstance(entity, InfraredEntity) and entity.device_id == message.device_id:
                 try:
                     await entity.on_command(
                         message.carrier_frequency, message.repeat_count,
@@ -591,7 +687,19 @@ class NativeApiServer(BasicEntity):
             client, message
         ):
             return
+        fields = message.DESCRIPTOR.fields_by_name
+        if "key" in fields and "device_id" in fields:
+            entity = self.attached_device.get_entity_by_key(message.key)
+            if entity is None or entity.device_id != message.device_id:
+                return
         await self.attached_device.publish(self, "client_request", message)
+
+    @staticmethod
+    def _yaml_transfer_done(client: NativeApiConnection, task: asyncio.Task[None]) -> None:
+        if client._yaml_task is task:
+            client._yaml_task = None
+        if not task.cancelled() and task.exception() is not None:
+            logger.debug("Stored YAML transfer failed")
 
     async def send_homeassistant_action(
         self,

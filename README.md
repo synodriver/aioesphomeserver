@@ -22,8 +22,11 @@ Allow your Python program to show up to Home Assistant as an ESPHome device.
   - Alarm control panel, Date, DateTime, Time, Update, Event
   - Camera, Infrared, Radio frequency
 * Bluetooth proxy abstraction with an optional Bleak backend example
-* Backend-neutral serial and Z-Wave proxy support for Native API 1.18 clients
-* Action and argument descriptions/examples in service discovery
+* Native API 1.19 with `aioesphomeapi>=46.23.0`, including serial and Z-Wave proxies
+* Action and argument descriptions/examples, optional flags and textual defaults
+* Onboarding wizard descriptions and runtime Home Assistant entity selections
+* Sendspin pairing token backend hooks over Noise-encrypted connections
+* Explicit configuration export using the ESPHome EHY1/zstd YAML format
 * Backend-neutral ESPHome Voice Assistant protocol support
 * Optional ESPHome-compatible Noise encryption for the native API
 
@@ -125,14 +128,18 @@ unless the network design explicitly requires it.
 
 ## Development
 
-This project is managed with [uv](https://docs.astral.sh/uv/) and supports Python 3.12+.
+This project supports Python 3.12+. Install development dependencies with pip:
 
 ```bash
-uv sync
-uv run pytest
-uv lock --upgrade
-uv export --format requirements.txt --no-dev --no-emit-project --no-hashes --output-file requirements.txt
+python -m pip install -r requirements-dev.txt
+python -m pip install -e .
+python -m pytest
 ```
+
+`requirements.txt` pins the audited `aioesphomeapi` version. Python 3.12/3.13
+also require `backports.zstd`; Python 3.14 uses the standard library. The obsolete
+`uv.lock` has been removed because it described a different protocol version and
+Python requirement.
 
 ## Interfacing with your own code
 
@@ -171,7 +178,12 @@ _This is alpha quality at best._ Expect bugs, both striking and subtle. Use at y
 general-purpose host, network isolation or a VPN such as WireGuard/Tailscale can
 still provide useful defense in depth.
 
-See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/homeassistant_actions.py`, `examples/homeassistant_state_time.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, `examples/serialx_proxy.py`, `examples/zwave_serialx_proxy.py`, and `examples/voice_assistant.py`.
+See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/device_setup.py`, `examples/check_device_setup_client.py`, `examples/homeassistant_actions.py`, `examples/homeassistant_state_time.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, `examples/serialx_proxy.py`, `examples/zwave_serialx_proxy.py`, and `examples/voice_assistant.py`.
+
+Run `python -m examples.device_setup`, then `python -m examples.check_device_setup_client`
+to try the wizard, pairing status and YAML export with the official client. The
+sample Sendspin provider reports `NOT_READY` until replaced with an actual backend.
+Zstandard uses `compression.zstd` on Python 3.14+ and `backports.zstd` on Python 3.12/3.13.
 
 The Bleak proxy example advertises runtime scanning-mode support. On Linux it
 passes BlueZ `or_patterns` for passive scanning and falls back to active
