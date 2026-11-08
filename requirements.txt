@@ -1,6 +1,6 @@
 # Runtime dependency snapshot; install with python -m pip install -r requirements.txt.
 # Keep direct requirements compatible with pyproject.toml.
-aioesphomeapi==46.23.0
+aioesphomeapi==46.28.0
     # via aioesphomeserver
 backports.zstd>=1.0.0 ; python_version < '3.14'
     # via aioesphomeserver
@@ -64,7 +64,7 @@ tzlocal==5.4.4
     # via aioesphomeapi
 yarl==1.24.2
     # via aiohttp
-zeroconf==0.150.0
+zeroconf==0.154.0
     # via
     #   aioesphomeapi
     #   aioesphomeserver

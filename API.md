@@ -66,7 +66,7 @@ await device.run(api_port=6053, web_port=None)
 
 当前实现是启动时固定 PSK；收到 `NoiseEncryptionSetKeyRequest` 会明确返回 `success=false`，并声明 `api_encryption_provisionable=false`。修改密钥后必须同步更新 Home Assistant 中的配置。密钥不应写入日志或提交到公开仓库。
 
-服务端响应 API 版本 `1.19`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 Python 3.12 环境的 `aioesphomeapi 46.23.0`。
+服务端响应 API 版本 `1.19`，支持握手、认证（当前无密码）、设备信息、设备能力、实体枚举、状态订阅、日志订阅、Ping/Pong、断开和已有实体命令。库会响应 `DeviceCapabilitiesRequest`（149）并返回 `DeviceCapabilitiesResponse`（150）；蓝牙、语音、Z-Wave 和串口能力同时写入旧版 `DeviceInfoResponse` 字段，兼容旧客户端。协议基准为 Python 3.12 环境的 `aioesphomeapi 46.28.0`。
 
 Native API 单帧 payload 最大为 `65535` 字节，varuint 最多 4 字节；服务端默认接受最多 6 个并发客户端，并要求明文客户端在 60 秒内发送首个消息。超过限制或发送错误前导的连接会被关闭，入站日志只记录 protobuf 消息类型，不记录参数和二进制 payload。
 
@@ -295,7 +295,7 @@ await voice.send_audio(pcm_chunk)
 await voice.finish_audio()
 ```
 
-`start()` 只有收到无错误的 `VoiceAssistantResponse` 后才允许 `send_audio()`。空音频块会被拒绝；启用 `multi_channel_audio=True` 后，每个音频消息必须同时包含两个非空声道，与 ESPHome 官方的双声道发送规则一致。`is_streaming_audio` 表示麦克风流是否仍可发送，`is_pipeline_active` 则会持续到 `RUN_END` 或显式 `stop()`。
+普通 `start()` 在收到无错误的 `VoiceAssistantResponse` 后才允许 `send_audio()`；协商了唤醒词音频且提供检测元数据时，可在请求发出后立即发送缓冲音频，见下文。空音频块会被拒绝；启用 `multi_channel_audio=True` 后，每个音频消息必须同时包含两个非空声道，与 ESPHome 官方的双声道发送规则一致。`is_streaming_audio` 表示麦克风流是否仍可发送，`is_pipeline_active` 则会持续到 `RUN_END`、唤醒词拒绝或显式 `stop()`。
 
 只做播报、不采集麦克风的设备可使用 `VoiceAssistant(output_only=True)`。此模式与 Linux Voice Assistant 一样声明 `API_AUDIO | ANNOUNCE`，但不声明完整 `VOICE_ASSISTANT` 能力，也不允许调用 `start()`。`on_announcement()` 可等待实际播放结束再返回；它在独立任务中运行，不会在播放期间阻塞 Native API 心跳和其他消息。
 
@@ -356,7 +356,7 @@ Linux 上将 `COM3`、`COM4` 替换为实际设备路径。串口示例收到客
 
 `await device.subscribe_homeassistant_state("sensor.example", attribute="", once=False)` 注册 Home Assistant 状态订阅。注册可早于客户端连接，后续客户端订阅时仍会收到请求。响应作为 `homeassistant_state` 事件发送给设备实体，内容为完整的 `HomeAssistantStateResponse`；`once=True` 在收到首个匹配响应后移除。`await device.request_time()` 向已连接客户端发送 `GetTimeRequest`，收到的完整 `GetTimeResponse`（包括 `parsed_timezone` 和 DST 规则）作为 `time_response` 事件传给实体。示例见 `examples/homeassistant_state_time.py`。
 
-`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。46.23.0 的协议共 187 个消息类型、895 个字段，本轮新增类型和字段的实现及验证见 [AUDIT_46_23.md](AUDIT_46_23.md)。
+`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。当前 46.28.0 协议共 191 个消息类型、913 个字段，全部消息及字段的引用入口见 [协议清单](tools/proto_46_28_inventory.md)，本轮变化及验证见 [AUDIT_46_28.md](AUDIT_46_28.md)；46.23.0 的升级历史见 [AUDIT_46_23.md](AUDIT_46_23.md)。
 
 ## 46.23.0 新能力
 
@@ -389,7 +389,7 @@ device = Device(name="wizard-demo", wizard=wizard)
 选择值可通过只读快照 `wizard.selections` 获取，只存 RAM，不做持久化；客户端应在每次重连后、
 订阅 HA 状态前重发。继承并覆写 `async on_input(key, entity_ids: tuple[str, ...])` 接入应用，
 仅在规范化后的选择变化时调用，回调成功后才记录选择；失败或取消后可重试同一选择。
-同一输入 key 的回调互斥执行。连接内向导输入、配对令牌请求及随后到达的 HA 状态订阅
+同一输入 key 的回调互斥执行。连接内向导输入、配对令牌、崩溃报告请求及随后到达的 HA 状态订阅
 按接收顺序在后台处理，慢回调不会阻塞 Ping；断开时取消未完成回调并丢弃排队请求。
 如果连接仍在运行而后端等待的内部任务被取消，服务端会关闭该连接并清理队列，
 客户端重连后应重发配置，避免后续订阅使用未完成的配置。
@@ -463,6 +463,119 @@ D:\conda\envs\hass\python.exe -m examples.check_device_setup_client
 | 子设备 | `DeviceInfo(relation=DeviceRelation.CHILD)` 表示同一物理设备的子设备；默认 `VIA` 为独立设备经本机中转。直接保留官方 protobuf 字段。见 `examples/entity_showcase.py`。 |
 | 媒体格式 | `MediaPlayerSupportedFormat(..., bitrate=192)`，单位 kbps，0 表示无偏好；通过 `MediaPlayerEntity(supported_formats=...)` 传入。见 `examples/entity_showcase.py`。 |
 | USB 描述 | `UsbDeviceDescriptor(interface_class=..., port_number=...)` 通过 `SerialProxyIdentity.usb` 保留。`examples/serialx_proxy.py` 接受显式 `identity=`，仅在取得真实 USB 描述时设置 `source=USB`；默认 `NONE`，不再使用上游标为保留的 `CONFIGURED` 值。 |
+
+## 46.28.0 新能力
+
+### 崩溃报告
+
+`Device(crash_report=CrashReportStore(report))` 发布当前报告的能力标志，并响应
+`CrashReportRequest`（163）/`CrashReportResponse`（164）。官方客户端调用
+`await client.crash_report()`，调用前应检查
+`(await client.device_capabilities()).crash_report.flags & CrashReportFlag.PRESENT`。
+
+```python
+from aioesphomeserver import (
+    CrashReason, CrashReportCore, CrashReportFlag, CrashReportResponse,
+    CrashReportStore, Device,
+)
+
+store = CrashReportStore(CrashReportResponse(
+    flags=int(CrashReportFlag.PRESENT | CrashReportFlag.BUILD_MATCHES),
+    reason=CrashReason.ABORT, pc=0x40001234, build_time=1794000000,
+    crashed_core=0,
+    cores=[CrashReportCore(core=0, backtrace=[0x40001234, 0x40005678])],
+))
+device = Device(name="diagnostic-device", crash_report=store)
+```
+
+报告使用官方 protobuf，完整保留 `flags`、`reason`、`pc`、`cause`、`fault_address`、
+`build_time`、`crashed_core` 和每个 `cores` 的 `core`、`backtrace`。
+标志包括 `PRESENT`、`BUILD_MATCHES`、`CAUSE`、`FAULT_ADDRESS`；后端按实际诊断设置。
+`CrashReportStore()` 表示已接入但当前无报告，收到请求返回空响应；未接入时不应请求该能力。
+
+报告在内存中保存，`set_report(response)` 可替换，调用时复制消息，完整 protobuf 不得超过
+65515 字节。多客户端读取互斥，只有一个客户端可取得同一份报告；响应发送成功后清除，
+失败、取消或连接停止时保留。发送期间存入的新报告不会被旧发送清除。报告清除后能力标志
+变为 0，已读取的客户端能力快照不会自动更新，需重新请求。
+
+应用自行提供诊断数据或持久化加载；库不安装 Python 异常捕获器，不把 Python traceback
+伪装成固件 PC 地址。示例 `python -m examples.crash_report` 提供一份明确标注为模拟的记录，
+可用 `python -m examples.check_device_setup_client` 验证读取和清除。
+
+### 唤醒词音频
+
+`VoiceAssistant(wake_word_audio=True)` 声明 `VoiceAssistantFeature.WAKE_WORD_AUDIO`
+（位 7），也写入旧版设备信息能力字段。`output_only=True` 不允许开启该功能。
+官方客户端通过 `subscribe_voice_assistant(..., wake_word_audio=True)` 请求订阅位 8，
+必须提供 `handle_audio`；其 `handle_start` 会接收第五个
+`VoiceAssistantWakeWordAudio | None` 参数。未请求时仍使用四参数回调。
+
+只有本机声明支持且当前客户端请求后，`voice.is_wake_word_audio_requested` 才为真。
+应用调用 `start(wake_word=VoiceAssistantWakeWordAudio.from_dict({...}))` 传入检测元数据：
+
+| 模型字段 | 发送的 VoiceAssistantRequest 字段 |
+| --- | --- |
+| `wake_word_id` | `wake_word_id`（6） |
+| `audio_bytes` | `wake_word_audio_bytes`（7） |
+| `probability` | `wake_word_probability`（8） |
+| `probability_cutoff` | `wake_word_probability_cutoff`（9） |
+| `audio_bytes2` | `wake_word_audio_bytes2`（10） |
+
+ID 非空、字节数为 uint32、概率和阈值为有限的 [0, 1] 数值；非双声道设备不能声明第二声道
+缓冲字节数。两个字节数表示后续音频流开头属于唤醒词的部分，不包含之后的命令语音。
+库只转发元数据和应用送入的音频，不实现采集或检测算法，也不根据概率自动作出验证结论。
+
+**必须在等待启动回执期间发送缓冲音频**，HA 才能进行验证。典型调用顺序：
+
+```python
+import asyncio
+from aioesphomeserver import VoiceAssistantWakeWordAudio
+
+detection = VoiceAssistantWakeWordAudio.from_dict({
+    "wake_word_id": "okay_nabu", "audio_bytes": len(buffered_pcm),
+    "probability": 0.9, "probability_cutoff": 0.7,
+})
+start_task = asyncio.create_task(voice.start(
+    wake_word_phrase="Okay Nabu", wake_word=detection,
+))
+try:
+    await voice.wait_until_streaming_audio(timeout=10)
+    # 分小块发送缓冲 PCM，然后继续实时数据；双声道每块都要提供 data2。
+    for offset in range(0, len(buffered_pcm), 1024):
+        await voice.send_audio(buffered_pcm[offset:offset + 1024])
+    port = await start_task
+    # 继续通过 send_audio 发送实时音频；应用在采集任务中处理。
+finally:
+    start_task.cancel()
+    await asyncio.gather(start_task, return_exceptions=True)
+```
+
+`wait_until_streaming_audio()` 在请求发送后允许提前发流；启动响应仍通过 `start_task` 返回。
+未协商该功能时，检测元数据被省略，恢复等待启动响应的旧行为；应用应检查协商状态，避免
+把缓冲唤醒词音频混入普通命令流。`send_audio()` 仍要求 API 音频端口 0；提前流不接受 UDP 回执。
+
+`VOICE_ASSISTANT_WAKE_WORD_REJECTED`（13）经 `on_event()` 传给应用，并停止流及使待启动请求失败。
+拒绝、错误、RUN_END、断线、超时、取消或显式停止均收回提前流状态。超时/取消还会尝试通知
+客户端停止；该停止通知最多等待 1 秒，写入失败或超时则关闭连接，避免启动任务的取消清理
+无限等待。原始启动超时或取消仍会向调用方传播。
+若已 `finish_audio()`，或已收到 STT_END/STT_VAD_END，稍后请求写入完成或收到启动响应
+也不会重新打开麦克风流。新的 start() 会重置本轮音频结束标记。
+完整发送缓冲音频及实时音频的示例见 `examples/voice_assistant.py` 的
+`stream_detected_wake_word()`；它并发等待启动结果和音频发送，拒绝或断线导致启动失败时，
+即使麦克风异步迭代器仍在等待下一块数据，也会取消发送任务并退出。
+无需安装音频依赖即可阅读和用模拟数据测试。
+
+### USB 接口描述和其余变更
+
+`UsbDeviceDescriptor.interface_description`（7）为 USB iInterface 字符串，缺失时为空。
+通过 `SerialProxy(identity=SerialProxyIdentity(usb=UsbDeviceDescriptor(...)))` 传入，
+现有完整消息转发会保留该字段；`examples/serialx_proxy.py` 的身份配置说明已更新。
+只填写实际硬件描述，不从串口路径推断。
+
+上游 `InfraredRFReceiveEvent.timings` 的 std::span 注解不改变 Python wire 数据。
+`probe_on_announce`、共享 zeroconf listener、`send_keepalive_now()` 和重连日志属于客户端行为，
+服务端继续按现有协议响应 Ping。运行依赖最低 aioesphomeapi 调整为 46.28.0，
+zeroconf 最低版本跟随上游升至 0.152.0；`requirements.txt` 使用已验证的 0.154.0。
 
 日志订阅遵循客户端请求的 `level`，级别为 0 时取消该连接的日志推送。请求 `dump_config` 时调用 `Device.dump_config(client)`，应用可覆写并通过 `await client.log(level, text)` 发送安全的配置摘要；默认实现不输出配置。
 

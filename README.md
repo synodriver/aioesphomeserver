@@ -22,12 +22,14 @@ Allow your Python program to show up to Home Assistant as an ESPHome device.
   - Alarm control panel, Date, DateTime, Time, Update, Event
   - Camera, Infrared, Radio frequency
 * Bluetooth proxy abstraction with an optional Bleak backend example
-* Native API 1.19 with `aioesphomeapi>=46.23.0`, including serial and Z-Wave proxies
+* Native API 1.19 with `aioesphomeapi>=46.28.0`, including serial and Z-Wave proxies
 * Action and argument descriptions/examples, optional flags and textual defaults
 * Onboarding wizard descriptions and runtime Home Assistant entity selections
 * Sendspin pairing token backend hooks over Noise-encrypted connections
 * Explicit configuration export using the ESPHome EHY1/zstd YAML format
 * Backend-neutral ESPHome Voice Assistant protocol support
+* Buffered wake word audio and detection metadata for Home Assistant verification
+* Application-supplied crash reports with per-core backtraces and consume-on-read behavior
 * Optional ESPHome-compatible Noise encryption for the native API
 
 ## Usage
@@ -178,12 +180,18 @@ _This is alpha quality at best._ Expect bugs, both striking and subtle. Use at y
 general-purpose host, network isolation or a VPN such as WireGuard/Tailscale can
 still provide useful defense in depth.
 
-See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/device_setup.py`, `examples/check_device_setup_client.py`, `examples/homeassistant_actions.py`, `examples/homeassistant_state_time.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, `examples/serialx_proxy.py`, `examples/zwave_serialx_proxy.py`, and `examples/voice_assistant.py`.
+See [API.md](API.md) for Native API, custom services, Home Assistant actions, Bluetooth proxy, camera, and Voice Assistant details. Runnable examples are in `examples/basic.py`, `examples/entity_showcase.py`, `examples/custom_services.py`, `examples/device_setup.py`, `examples/crash_report.py`, `examples/check_device_setup_client.py`, `examples/homeassistant_actions.py`, `examples/homeassistant_state_time.py`, `examples/external_data_entities.py`, `examples/bleak_proxy.py`, `examples/camera.py`, `examples/serialx_proxy.py`, `examples/zwave_serialx_proxy.py`, and `examples/voice_assistant.py`.
 
 Run `python -m examples.device_setup`, then `python -m examples.check_device_setup_client`
 to try the wizard, pairing status and YAML export with the official client. The
 sample Sendspin provider reports `NOT_READY` until replaced with an actual backend.
 Zstandard uses `compression.zstd` on Python 3.14+ and `backports.zstd` on Python 3.12/3.13.
+
+`python -m examples.crash_report` serves a synthetic crash record; the same check
+client fetches it once and clears it. `examples/voice_assistant.py` includes
+`stream_detected_wake_word()` to send buffered PCM before the start response when
+the official client subscribes with `wake_word_audio=True`. Microphone capture
+and local wake word detection are supplied by the application.
 
 The Bleak proxy example advertises runtime scanning-mode support. On Linux it
 passes BlueZ `or_patterns` for passive scanning and falls back to active

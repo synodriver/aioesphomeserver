@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -26,7 +27,9 @@ from aioesphomeapi.model import (
     VoiceAssistantCommandFlag,
     VoiceAssistantEventType,
     VoiceAssistantFeature,
+    VoiceAssistantSubscriptionFlag,
     VoiceAssistantTimerEventType,
+    VoiceAssistantWakeWordAudio,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +42,9 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Best-effort abort must not keep a cancelled/timed-out start alive forever.
+ABORT_WRITE_TIMEOUT = 1.0
 
 
 __all__ = [
@@ -54,6 +60,7 @@ __all__ = [
     "VoiceAssistantTimer",
     "VoiceAssistantTimerEventType",
     "VoiceAssistantWakeWordConfig",
+    "VoiceAssistantWakeWordAudio",
 ]
 
 
@@ -130,6 +137,7 @@ class VoiceAssistant:
         announcements: bool = False,
         start_conversation: bool = False,
         multi_channel_audio: bool = False,
+        wake_word_audio: bool = False,
         available_wake_words: "Sequence[VoiceAssistantWakeWordConfig]" = (),
         active_wake_words: "Sequence[str]" = (),
         max_active_wake_words: int = 0,
@@ -140,6 +148,8 @@ class VoiceAssistant:
             raise ValueError(
                 "output-only voice assistants cannot use microphone channels"
             )
+        if output_only and wake_word_audio:
+            raise ValueError("output-only voice assistants cannot send wake word audio")
 
         features = VoiceAssistantFeature.API_AUDIO
         if not output_only:
@@ -154,6 +164,8 @@ class VoiceAssistant:
             features |= VoiceAssistantFeature.START_CONVERSATION
         if multi_channel_audio:
             features |= VoiceAssistantFeature.MULTI_CHANNEL_AUDIO
+        if wake_word_audio:
+            features |= VoiceAssistantFeature.WAKE_WORD_AUDIO
 
         self.feature_flags = int(features)
         self.legacy_version = 2 if speaker else 1
@@ -165,6 +177,9 @@ class VoiceAssistant:
         self._subscribed_event = asyncio.Event()
         self._start_future: asyncio.Future[int] | None = None
         self._stream_port: int | None = None
+        self._audio_ready = asyncio.Event()
+        self._wake_word_starting = False
+        self._audio_finished = False
         self._pipeline_active = False
         self._announcement_tasks: set[asyncio.Task[None]] = set()
         self._configuration = VoiceAssistantConfiguration(
@@ -190,6 +205,29 @@ class VoiceAssistant:
     def is_streaming_audio(self) -> bool:
         return self._stream_port is not None
 
+    @property
+    def is_wake_word_audio_requested(self) -> bool:
+        """True only when both the backend and the subscribed client enable it."""
+        return bool(
+            self._client is not None
+            and self.feature_flags & VoiceAssistantFeature.WAKE_WORD_AUDIO
+            and self._subscription_flags & VoiceAssistantSubscriptionFlag.WAKE_WORD_AUDIO
+        )
+
+    async def wait_until_streaming_audio(self, timeout: float | None = None) -> None:
+        """Wait until audio can be sent, including before wake word verification."""
+        if timeout is None:
+            await self._audio_ready.wait()
+        else:
+            await asyncio.wait_for(self._audio_ready.wait(), timeout)
+
+    def _set_stream_port(self, port: int | None) -> None:
+        self._stream_port = port
+        if port is None:
+            self._audio_ready.clear()
+        else:
+            self._audio_ready.set()
+
     async def wait_until_subscribed(self, timeout: float | None = None) -> None:
         """Wait until a Home Assistant client subscribes."""
         if timeout is None:
@@ -205,6 +243,7 @@ class VoiceAssistant:
         use_wake_word: bool = False,
         audio: VoiceAssistantAudioConfig | None = None,
         wake_word_phrase: str = "",
+        wake_word: VoiceAssistantWakeWordAudio | None = None,
         timeout: float = 10.0,
     ) -> int:
         """Request an Assist pipeline and return its audio port.
@@ -212,13 +251,18 @@ class VoiceAssistant:
         A return value of ``0`` selects protobuf API audio. A positive value
         selects legacy UDP audio; the application is responsible for sending
         microphone data to that port.
+
+        When wake word audio is negotiated, run start() as a task, wait for
+        wait_until_streaming_audio(), then send the declared buffered bytes and
+        live audio via send_audio() while start() awaits the client's verdict.
+        Without that subscription, wake_word metadata is omitted for compatibility.
         """
         client = self._require_client()
         if self._output_only:
             raise VoiceAssistantError("an output-only endpoint cannot start Assist")
         if self._pipeline_active:
             raise VoiceAssistantError("an Assist pipeline is already active")
-        if self._start_future is not None and not self._start_future.done():
+        if self._start_future is not None:
             raise VoiceAssistantError(
                 "a voice assistant start request is already pending"
             )
@@ -230,9 +274,26 @@ class VoiceAssistant:
             flags |= VoiceAssistantCommandFlag.USE_WAKE_WORD
         audio = audio or VoiceAssistantAudioConfig()
 
+        detection = wake_word if self.is_wake_word_audio_requested else None
+        if detection is not None:
+            if not detection.wake_word_id:
+                raise ValueError("wake_word_id cannot be empty")
+            if not all(0 <= value <= 0xFFFFFFFF for value in (
+                detection.audio_bytes, detection.audio_bytes2,
+            )):
+                raise ValueError("wake word audio byte counts must fit uint32")
+            if detection.audio_bytes2 and not self._multi_channel_audio:
+                raise ValueError("second wake word audio channel requires multi_channel_audio=True")
+            if not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in (
+                detection.probability, detection.probability_cutoff,
+            )):
+                raise ValueError("wake word probabilities must be finite values in [0, 1]")
+
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._start_future = future
+        self._wake_word_starting = detection is not None
+        self._audio_finished = False
         try:
             await client.write_message(
                 VoiceAssistantRequest(
@@ -245,12 +306,45 @@ class VoiceAssistant:
                         volume_multiplier=audio.volume_multiplier,
                     ),
                     wake_word_phrase=wake_word_phrase,
+                    wake_word_id=detection.wake_word_id if detection is not None else "",
+                    wake_word_audio_bytes=detection.audio_bytes if detection is not None else 0,
+                    wake_word_audio_bytes2=detection.audio_bytes2 if detection is not None else 0,
+                    wake_word_probability=detection.probability if detection is not None else 0.0,
+                    wake_word_probability_cutoff=detection.probability_cutoff if detection is not None else 0.0,
                 )
             )
+            if detection is not None and not future.done() and not self._audio_finished:
+                # The request must precede the audio; HA needs it to verify the
+                # wake word before it can send the pipeline start response.
+                self._set_stream_port(0)
             port = await asyncio.wait_for(future, timeout)
+        except BaseException as err:
+            if self._wake_word_starting:
+                self._set_stream_port(None)
+                self._pipeline_active = False
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
+            if (self._wake_word_starting and isinstance(err, (TimeoutError, asyncio.CancelledError))
+                and client is self._client):
+                # HA may still be verifying the buffered audio. End its input
+                # when the caller gives up, instead of leaving an open stream.
+                try:
+                    async with asyncio.timeout(ABORT_WRITE_TIMEOUT):
+                        await client.write_message(VoiceAssistantRequest(start=False))
+                except asyncio.CancelledError:
+                    client.writer.close()
+                    raise
+                except Exception:
+                    # A blocked/broken transport cannot deliver the abort;
+                    # disconnect to end the remote verification session.
+                    client.writer.close()
+            raise
         finally:
             if self._start_future is future:
                 self._start_future = None
+                self._wake_word_starting = False
         return port
 
     async def send_audio(self, data: bytes, data2: bytes | None = None) -> None:
@@ -273,13 +367,16 @@ class VoiceAssistant:
         if self._stream_port != 0:
             raise VoiceAssistantError("there is no active API audio stream")
         await self._require_client().write_message(VoiceAssistantAudio(end=True))
-        self._stream_port = None
+        self._audio_finished = True
+        self._set_stream_port(None)
 
     async def stop(self) -> None:
         """Abort the current Assist pipeline."""
         await self._require_client().write_message(VoiceAssistantRequest(start=False))
-        self._stream_port = None
+        self._set_stream_port(None)
         self._pipeline_active = False
+        if self._wake_word_starting:
+            self._fail_pending_start(VoiceAssistantStartError("Assist was stopped"))
 
     # Application backend hooks ----------------------------------------
     async def on_client_subscription(self, subscribed: bool, flags: int) -> None:
@@ -346,10 +443,17 @@ class VoiceAssistant:
                         VoiceAssistantEventType.VOICE_ASSISTANT_STT_END,
                         VoiceAssistantEventType.VOICE_ASSISTANT_STT_VAD_END,
                     ):
-                        self._stream_port = None
-                    elif event_type == VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END:
-                        self._stream_port = None
+                        self._audio_finished = True
+                        self._set_stream_port(None)
+                    elif event_type == VoiceAssistantEventType.VOICE_ASSISTANT_WAKE_WORD_REJECTED:
+                        self._set_stream_port(None)
                         self._pipeline_active = False
+                        self._fail_pending_start(VoiceAssistantStartError("wake word was rejected"))
+                    elif event_type == VoiceAssistantEventType.VOICE_ASSISTANT_RUN_END:
+                        self._set_stream_port(None)
+                        self._pipeline_active = False
+                        if self._wake_word_starting:
+                            self._fail_pending_start(VoiceAssistantStartError("Assist ended during wake word verification"))
                     await self.on_event(
                         event_type,
                         {item.name: item.value for item in message.data},
@@ -400,7 +504,7 @@ class VoiceAssistant:
             return
         self._client = None
         self._subscription_flags = 0
-        self._stream_port = None
+        self._set_stream_port(None)
         self._pipeline_active = False
         self._subscribed_event.clear()
         self._fail_pending_start(
@@ -424,7 +528,7 @@ class VoiceAssistant:
         elif self._client is client:
             self._client = None
             self._subscription_flags = 0
-            self._stream_port = None
+            self._set_stream_port(None)
             self._pipeline_active = False
             self._subscribed_event.clear()
             self._fail_pending_start(
@@ -438,12 +542,16 @@ class VoiceAssistant:
         if future is None or future.done():
             return
         if message.error:
+            self._set_stream_port(None)
             future.set_exception(
                 VoiceAssistantStartError("Assist pipeline failed to start")
             )
+        elif self._wake_word_starting and message.port != 0:
+            self._set_stream_port(None)
+            future.set_exception(VoiceAssistantStartError("wake word audio requires API audio"))
         else:
             self._pipeline_active = True
-            self._stream_port = message.port
+            self._set_stream_port(None if self._audio_finished else message.port)
             future.set_result(message.port)
 
     async def _handle_configuration_request(

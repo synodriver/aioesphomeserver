@@ -7,7 +7,8 @@ Run with Python 3.12 and serialx installed:
 Supply identity=SerialProxyIdentity(source=SerialProxyIdentitySource.USB,
     flags=SerialProxyIdentityFlag.CONNECTED,
     usb=UsbDeviceDescriptor(vendor_id=..., product_id=..., interface_number=...,
-                            interface_class=..., port_number=...))
+                            interface_class=..., port_number=...,
+                            interface_description="UART interface"))
 only with descriptors obtained from the actual USB device. No USB identity is
 inferred from the port name; CONFIGURED (1) is reserved by the upstream protocol.
 """

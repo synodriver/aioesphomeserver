@@ -31,6 +31,7 @@ from aioesphomeserver.services import SupportsResponseType
 
 if TYPE_CHECKING:
     from aioesphomeserver.bluetooth_proxy import BluetoothProxy
+    from aioesphomeserver.crash_report import CrashReportStore
     from aioesphomeserver.services import ServiceArgType, ServiceArgument, UserService
     from aioesphomeserver.serial_proxy import SerialProxy
     from aioesphomeserver.sendspin import SendspinProvider
@@ -116,6 +117,7 @@ class Device:
         wizard: OnboardingWizard | None = None,
         sendspin: SendspinProvider | None = None,
         stored_yaml: StoredYaml | None = None,
+        crash_report: CrashReportStore | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
         self.mac_address = mac_address or self._generate_mac_address()
@@ -153,6 +155,7 @@ class Device:
         self.wizard = wizard
         self.sendspin = sendspin
         self.stored_yaml = stored_yaml
+        self.crash_report = crash_report
         if (stored_yaml is not None and not stored_yaml.allow_unencrypted
             and self.encryption_key_bytes is None):
             raise ValueError("stored YAML requires encryption_key or allow_unencrypted=True")
@@ -255,6 +258,8 @@ class Device:
             response.sendspin.client_id = self.sendspin.client_id
         if self.stored_yaml is not None:
             response.store_yaml.supported = True
+        if self.crash_report is not None:
+            response.crash_report.flags = self.crash_report.flags
         response.serial_proxies.extend(proxy.info() for proxy in self.serial_proxies)
         return response
 

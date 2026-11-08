@@ -9,6 +9,7 @@ from aioesphomeserver.button import *
 from aioesphomeserver.camera import *
 from aioesphomeserver.climate import *
 from aioesphomeserver.cover import *
+from aioesphomeserver.crash_report import *
 from aioesphomeserver.date import *
 from aioesphomeserver.datetime import *
 from aioesphomeserver.device import *

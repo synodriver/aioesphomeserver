@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from aioesphomeapi.api_pb2 import AuthenticationRequest  # type: ignore
 from aioesphomeapi.api_pb2 import AuthenticationResponse  # type: ignore
 from aioesphomeapi.api_pb2 import DeviceInfoRequest  # type: ignore
+from aioesphomeapi.api_pb2 import CrashReportRequest
 from aioesphomeapi.api_pb2 import DeviceWizardRequest, WizardInputSetRequest
 from aioesphomeapi.api_pb2 import SendspinPairingTokenRequest, SendspinPairingTokenResponse
 from aioesphomeapi.api_pb2 import GetYamlRequest
@@ -539,7 +540,7 @@ class NativeApiServer(BasicEntity):
         self, client: NativeApiConnection, message: "Message"
     ) -> None:
         if asyncio.current_task() is not client._setup_task and (
-            type(message) in (WizardInputSetRequest, SendspinPairingTokenRequest)
+            type(message) in (WizardInputSetRequest, SendspinPairingTokenRequest, CrashReportRequest)
             or (type(message) is SubscribeHomeAssistantStatesRequest
                 and client._setup_task is not None and not client._setup_task.done())
         ):
@@ -572,6 +573,10 @@ class NativeApiServer(BasicEntity):
             )
             return
 
+        if type(message) is CrashReportRequest:
+            if (crash_report := self.attached_device.crash_report) is not None:
+                await crash_report.send(client)
+            return
         if type(message) is DeviceWizardRequest:
             if (wizard := self.attached_device.wizard) is not None:
                 await client.write_message(wizard.response())
