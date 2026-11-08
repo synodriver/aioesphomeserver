@@ -49,6 +49,58 @@ New-NetFirewallRule `
 
 若启用了 Web Server，还需按实际配置放行对应端口（默认 `8080/tcp`）。不要在没有明确网络隔离方案时把这些端口开放到公用网络。mDNS 可发现只代表 UDP 发现链路正常，不能替代从 HA 主机到 `6053/tcp` 的连通性测试。
 
+## 设备主动连接 outgoing_connection
+
+`OutgoingConnection` 对应 ESPHome 的 `api.outgoing_connection`：设备主动连接 HA，随后仍作为
+Noise responder 和 Native API 设备端处理消息。实体、服务、状态订阅、语音和各代理复用原来的连接实现。
+
+```python
+from aioesphomeserver import Device, OutgoingConnection, SwitchEntity
+
+device = Device(
+    name="outgoing-demo", mac_address="02:00:00:00:10:54",
+    encryption_key="<HA 中该设备已有的 Noise 密钥>",
+    outgoing_connection=OutgoingConnection(host="192.168.1.10", port=6054, delay=60),
+)
+device.add_entity(SwitchEntity(name="Relay"))
+await device.run(api_port=6053, web_port=None)
+```
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `host` | `None` | 固定 IPv4/IPv6 地址；省略时从最后一个经 Noise 验证、声明回连目标的客户端学习 |
+| `port` | `6054` | HA 的监听端口，固定地址和学习地址均使用此端口 |
+| `delay` | `60.0` | 启动或最后一个回连目标断开后的等待秒数，允许 `0` |
+
+必须配置非全零的 32 字节 `encryption_key`，否则 `Device(...)` 立即报错。`host` 接受 IP 字面量，
+不接受域名；Python 实现也允许带 scope ID 的 IPv6 地址，学习到的链路本地 IPv6 会保留接口编号。
+`has_deep_sleep=True` 时对齐 ESPHome，启动立即尝试，正常断线后等待 5 秒再拨号。
+连接失败或握手失败使用 5 至 300 秒指数退避并附加 ±20% 随机抖动，TCP 连接超时 10 秒。
+
+HA 必须支持该功能并监听对应端口，而且已有该设备的 MAC 与密钥配置。主动连接不能代替首次添加设备。
+省略 `host` 时，必须先让 HA 成功连入一次：HA 的 `HelloRequest.outgoing_connection_target=True`
+仅在验证密钥后被接受。学习的是远端 IP，绝不使用其临时源端口。固定 `host` 不会被学习结果覆盖。
+存在任意已声明目标的连接时暂停拨号；已建立的主动连接即使没有收到目标标志，也不会触发重复拨号。
+经密钥验证且声明回连目标的入站连接会取消尚未完成的拨号，移交前重新检查连接数、目标连接和密钥。
+
+能力字段 `DeviceInfoResponse.api_outgoing_connection_supported` 随配置自动设置。
+保留原有 `Device(api_outgoing_connection_supported=True)` 参数，等价于无固定地址的
+`outgoing_connection=OutgoingConnection()`，同样需要有效密钥。
+默认不启用主动连接；未启用时忽略 Hello 中的回连声明，正常返回 HelloResponse，兼容新版 HA。
+旧版客户端无需发送这个标志，也能照常访问所有实体。
+
+`NativeApiServer.outgoing_host` 返回固定地址或已学习地址。学习地址只在当前服务实例中保存，
+同一个实例 `stop()` / `run()` 后仍保留；跨进程持久化由应用保存并在下次构造配置时传回 `host`。
+本地 API 监听仍启动，入站和主动连接共享 `max_connections`、加密和消息处理，不增加依赖。
+`stop()`、取消 `run()` 都会取消等待/拨号并释放会话。
+单条主动会话的异常或后端内部任务取消不会停止入站监听或永久结束拨号循环；
+后端断线清理按原顺序执行，一个后端失败后仍尝试其余后端的清理。
+停止、重启或取消 `run()` 在断线清理期间产生的取消会延后到其余后端清理完成后传播，
+保留最初的取消异常，避免串口或 Z-Wave 残留旧 owner。后端内部再次取消不会覆盖已有的连接取消。
+拨号完成与取消同时发生时，也会关闭未移交的连接并取回关闭结果。
+可运行示例见 [examples/outgoing_connection.py](examples/outgoing_connection.py)，上游对照与测试见
+[AUDIT_OUTGOING_CONNECTION.md](AUDIT_OUTGOING_CONNECTION.md)。
+
 ## Noise 加密
 
 `Device.encryption_key` 接受 base64 编码的 32 字节 ESPHome API 密钥，也接受原始 32 字节 `bytes`：
@@ -356,7 +408,7 @@ Linux 上将 `COM3`、`COM4` 替换为实际设备路径。串口示例收到客
 
 `await device.subscribe_homeassistant_state("sensor.example", attribute="", once=False)` 注册 Home Assistant 状态订阅。注册可早于客户端连接，后续客户端订阅时仍会收到请求。响应作为 `homeassistant_state` 事件发送给设备实体，内容为完整的 `HomeAssistantStateResponse`；`once=True` 在收到首个匹配响应后移除。`await device.request_time()` 向已连接客户端发送 `GetTimeRequest`，收到的完整 `GetTimeResponse`（包括 `parsed_timezone` 和 DST 规则）作为 `time_response` 事件传给实体。示例见 `examples/homeassistant_state_time.py`。
 
-`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。`Device(api_outgoing_connection_supported=True)` 会报错，因为本库尚未实现设备主动发起 API 连接；在线 Noise 配网也未实现。当前 46.28.0 协议共 191 个消息类型、913 个字段，全部消息及字段的引用入口见 [协议清单](tools/proto_46_28_inventory.md)，本轮变化及验证见 [AUDIT_46_28.md](AUDIT_46_28.md)；46.23.0 的升级历史见 [AUDIT_46_23.md](AUDIT_46_23.md)。
+`CameraImageRequest` 是不带实体 key 的全局请求，Camera 实体通过 `on_request(single, stream)` 响应。旧版 Cover 开/关/停命令仍可使用，现代位置字段优先。设备主动连接见上文 `outgoing_connection`；在线 Noise 配网尚未实现。当前 46.28.0 协议共 191 个消息类型、913 个字段，全部消息及字段的引用入口见 [协议清单](tools/proto_46_28_inventory.md)，本轮变化及验证见 [AUDIT_46_28.md](AUDIT_46_28.md)；46.23.0 的升级历史见 [AUDIT_46_23.md](AUDIT_46_23.md)。
 
 ## 46.23.0 新能力
 

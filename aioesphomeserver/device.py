@@ -27,6 +27,7 @@ from zeroconf.asyncio import AsyncZeroconf
 from aioesphomeserver.basic_entity import BasicEntity
 from aioesphomeserver.device_capabilities import DeviceCapabilitiesResponse
 from aioesphomeserver.logger import format_log
+from aioesphomeserver.outgoing_connection import OutgoingConnection
 from aioesphomeserver.services import SupportsResponseType
 
 if TYPE_CHECKING:
@@ -118,6 +119,7 @@ class Device:
         sendspin: SendspinProvider | None = None,
         stored_yaml: StoredYaml | None = None,
         crash_report: CrashReportStore | None = None,
+        outgoing_connection: OutgoingConnection | None = None,
     ) -> None:
         self.name = _normalize_device_name(name)
         self.mac_address = mac_address or self._generate_mac_address()
@@ -143,15 +145,19 @@ class Device:
         for instance, proxy in enumerate(self.serial_proxies):
             proxy.instance = instance
         self.zwave_proxy = zwave_proxy
-        if api_outgoing_connection_supported:
-            raise ValueError("outgoing API connections are not implemented")
-        self.api_outgoing_connection_supported = False
+        if api_outgoing_connection_supported and outgoing_connection is None:
+            outgoing_connection = OutgoingConnection()
+        self.outgoing_connection = outgoing_connection
+        self.api_outgoing_connection_supported = outgoing_connection is not None
         self.devices = tuple(devices)
         self.areas = tuple(areas)
         self.area = area
         self.encryption_key, self.encryption_key_bytes = _normalize_encryption_key(
             encryption_key
         )
+        if (outgoing_connection is not None
+            and self.encryption_key_bytes in (None, bytes(NOISE_PSK_LENGTH))):
+            raise ValueError("outgoing_connection requires a non-zero encryption_key")
         self.wizard = wizard
         self.sendspin = sendspin
         self.stored_yaml = stored_yaml

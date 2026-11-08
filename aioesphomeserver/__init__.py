@@ -23,6 +23,7 @@ from aioesphomeserver.lock import *
 from aioesphomeserver.media_player import *
 from aioesphomeserver.native_api_server import *
 from aioesphomeserver.number import *
+from aioesphomeserver.outgoing_connection import *
 from aioesphomeserver.radio_frequency import *
 from aioesphomeserver.select import *
 from aioesphomeserver.serial_proxy import *

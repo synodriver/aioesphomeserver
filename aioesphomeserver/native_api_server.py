@@ -58,6 +58,7 @@ from noise.exceptions import NoiseInvalidMessage
 
 from aioesphomeserver.basic_entity import BasicEntity
 from aioesphomeserver.device_capabilities import DeviceCapabilitiesRequest
+from aioesphomeserver.outgoing_connection import _OutgoingConnectionManager
 
 if TYPE_CHECKING:
     from asyncio import StreamReader, StreamWriter
@@ -111,6 +112,8 @@ class NativeApiConnection:
         server: "NativeApiServer",
         reader: "StreamReader",
         writer: "StreamWriter",
+        *,
+        outgoing: bool = False,
     ) -> None:
         self.server = server
         self.reader = reader
@@ -118,6 +121,9 @@ class NativeApiConnection:
         self.subscribe_to_logs = False
         self.log_level = 0
         self.client_info = ""
+        self.outgoing = outgoing
+        self.outgoing_connection_target = False
+        self.hello_received = False
         self.subscribe_to_states = False
         self.subscribe_to_homeassistant_services = False
         self.subscribe_to_homeassistant_states = False
@@ -197,8 +203,12 @@ class NativeApiConnection:
         if type(message) is HelloRequest:
             self.client_info = message.client_info
             if message.outgoing_connection_target:
-                self.running = False
-                return
+                manager = self.server._outgoing_manager
+                if (manager is not None and self._noise is not None
+                    and self.server.attached_device.encryption_key_bytes not in (None, bytes(32))
+                    and not self.outgoing_connection_target):
+                    self.outgoing_connection_target = True
+                    manager.on_target_client(self)
             await self.write_message(
                 HelloResponse(
                     api_version_major=API_VERSION_MAJOR,
@@ -207,6 +217,7 @@ class NativeApiConnection:
                     name=self.server.attached_device.name,
                 )
             )
+            self.hello_received = True
         elif type(message) is AuthenticationRequest:
             await self.write_message(AuthenticationResponse(invalid_password=False))
         elif type(message) is DisconnectRequest:
@@ -314,19 +325,13 @@ class NativeApiConnection:
             await self.writer.drain()
 
     async def _perform_noise_handshake(self, psk: bytes) -> None:
+        if self.outgoing:
+            await self._write_noise_server_hello()
         client_hello = await self._read_noise_frame()
         prologue = NOISE_PROLOGUE + len(client_hello).to_bytes(2, "big") + client_hello
 
-        server_hello = b"".join(
-            (
-                b"\x01",
-                self.server.attached_device.name.encode("utf-8"),
-                b"\0",
-                self.server.attached_device.mac_address.replace(":", "").lower().encode("ascii"),
-                b"\0",
-            )
-        )
-        await self._write_noise_frame(server_hello)
+        if not self.outgoing:
+            await self._write_noise_server_hello()
 
         noise = NoiseConnection.from_name(NOISE_PROTOCOL_NAME)
         noise.set_as_responder()
@@ -347,6 +352,13 @@ class NativeApiConnection:
 
         await self._write_noise_frame(b"\0" + response)
         self._noise = noise
+
+    async def _write_noise_server_hello(self) -> None:
+        device = self.server.attached_device
+        await self._write_noise_frame(b"".join((
+            b"\x01", device.name.encode("utf-8"), b"\0",
+            device.mac_address.replace(":", "").lower().encode("ascii"), b"\0",
+        )))
 
     async def _read_noise_message(self) -> "Message | None":
         assert self._noise is not None
@@ -399,6 +411,8 @@ class NativeApiConnection:
 
     async def stop(self, *, wait_closed: bool = True) -> None:
         if not self.running and self.writer.is_closing():
+            if wait_closed:
+                await self._wait_writer_closed()
             return
         self.running = False
         if self._setup_task is not None:
@@ -421,12 +435,14 @@ class NativeApiConnection:
             self._service_tasks.clear()
         if not self.writer.is_closing():
             self.writer.close()
-            if not wait_closed:
-                return
-            try:
-                await self.writer.wait_closed()
-            except (ConnectionResetError, BrokenPipeError):
-                pass
+        if wait_closed:
+            await self._wait_writer_closed()
+
+    async def _wait_writer_closed(self) -> None:
+        try:
+            await self.writer.wait_closed()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
 
 
 class NativeApiServer(BasicEntity):
@@ -460,6 +476,16 @@ class NativeApiServer(BasicEntity):
         self._homeassistant_state_subscriptions: dict[tuple[str, str], bool] = {}
         self.server: asyncio.Server | None = None
         self._started = asyncio.Event()
+        self._outgoing_manager: _OutgoingConnectionManager | None = None
+        self._outgoing_task: asyncio.Task[None] | None = None
+
+    @property
+    def outgoing_host(self) -> str | None:
+        """The configured or last key-verified dial-back IP, including IPv6 scope."""
+        if self._outgoing_manager is not None:
+            return self._outgoing_manager.host
+        config = self.attached_device.outgoing_connection
+        return config.host if config is not None else None
 
     @property
     def attached_device(self) -> Device:
@@ -468,17 +494,28 @@ class NativeApiServer(BasicEntity):
         return self.device
 
     async def run(self) -> None:
-        self.server = await asyncio.start_server(
+        config = self.attached_device.outgoing_connection
+        if config is not None and self._outgoing_manager is None:
+            self._outgoing_manager = _OutgoingConnectionManager(self, config)
+        listener = await asyncio.start_server(
             self.handle_client, self.host, self.port
         )
-        sockets: Any = self.server.sockets or []
+        self.server = listener
+        sockets: Any = listener.sockets or []
         self.bound_port = sockets[0].getsockname()[1] if sockets else self.port
         self._started.set()
-        await self.attached_device.log(
-            2, "api", f"Starting on {self.host}:{self.bound_port}"
-        )
-        async with self.server:
-            await self.server.serve_forever()
+        try:
+            await self.attached_device.log(
+                2, "api", f"Starting on {self.host}:{self.bound_port}"
+            )
+            async with listener, asyncio.TaskGroup() as group:
+                if self._outgoing_manager is not None:
+                    self._outgoing_task = group.create_task(self._outgoing_manager.run())
+                await listener.serve_forever()
+        finally:
+            # An older run may finish after restart() opened a new listener.
+            if self.server is listener:
+                await self.stop()
 
     async def wait_started(self) -> None:
         """Wait until the TCP listener has successfully bound its port."""
@@ -506,35 +543,60 @@ class NativeApiServer(BasicEntity):
     async def handle_client(
         self, reader: "StreamReader", writer: "StreamWriter"
     ) -> None:
+        await self._handle_connection(reader, writer)
+
+    async def _handle_connection(
+        self, reader: "StreamReader", writer: "StreamWriter", *, outgoing: bool = False
+    ) -> NativeApiConnection | None:
         if len(self._clients) >= self.max_connections:
             logger.warning("Rejecting native API client: connection limit reached")
             writer.close()
             await writer.wait_closed()
-            return
-        connection = NativeApiConnection(self, reader, writer)
+            return None
+        connection = NativeApiConnection(self, reader, writer, outgoing=outgoing)
         self._clients.add(connection)
         task = asyncio.current_task()
         if task is not None:
             self._client_tasks.add(task)
+        cancel_error: asyncio.CancelledError | None = None
         try:
             await connection.start()
+        except asyncio.CancelledError as err:
+            cancel_error = err
         finally:
             self._remove_homeassistant_action_client(connection)
             self._homeassistant_state_clients.discard(connection)
             self._clients.discard(connection)
-            bluetooth_proxy = self.attached_device.bluetooth_proxy
-            if bluetooth_proxy is not None:
-                await bluetooth_proxy.on_api_client_disconnected(connection)
-            voice_assistant = self.attached_device.voice_assistant
-            if voice_assistant is not None:
-                await voice_assistant.on_api_client_disconnected(connection)
-            for proxy in self.attached_device.serial_proxies:
-                await proxy.on_api_client_disconnected(connection)
-            zwave_proxy = self.attached_device.zwave_proxy
-            if zwave_proxy is not None:
-                await zwave_proxy.on_api_client_disconnected(connection)
-            if task is not None:
-                self._client_tasks.discard(task)
+            if self._outgoing_manager is not None:
+                self._outgoing_manager.on_client_removed(connection)
+            device = self.attached_device
+            try:
+                for backend in (
+                    device.bluetooth_proxy, device.voice_assistant,
+                    *device.serial_proxies, device.zwave_proxy,
+                ):
+                    if backend is None:
+                        continue
+                    try:
+                        await backend.on_api_client_disconnected(connection)
+                    except asyncio.CancelledError as err:
+                        if task is not None and task.cancelling():
+                            # Finish the remaining backends before propagating
+                            # shutdown cancellation; they may still own ports.
+                            if cancel_error is None:
+                                cancel_error = err
+                        else:
+                            logger.warning("Native API backend cleanup was cancelled")
+                    except Exception:
+                        # A failed backend must not skip the remaining cleanup
+                        # or terminate the outgoing manager's shared task.
+                        logger.warning("Native API backend cleanup failed")
+            finally:
+                if task is not None:
+                    self._client_tasks.discard(task)
+            if cancel_error is not None:
+                raise cancel_error
+        return connection
 
     async def handle_client_request(
         self, client: NativeApiConnection, message: "Message"
@@ -927,6 +989,11 @@ class NativeApiServer(BasicEntity):
 
     async def stop(self) -> None:
         self._fail_homeassistant_actions("Native API server stopped")
+        outgoing_task = self._outgoing_task
+        self._outgoing_task = None
+        if outgoing_task is not None and outgoing_task is not asyncio.current_task():
+            outgoing_task.cancel()
+            await asyncio.gather(outgoing_task, return_exceptions=True)
         if self.server is not None:
             self.server.close()
             self.server = None

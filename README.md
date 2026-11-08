@@ -31,6 +31,7 @@ Allow your Python program to show up to Home Assistant as an ESPHome device.
 * Buffered wake word audio and detection metadata for Home Assistant verification
 * Application-supplied crash reports with per-core backtraces and consume-on-read behavior
 * Optional ESPHome-compatible Noise encryption for the native API
+* Optional device-initiated connections to Home Assistant, with target learning and automatic retries
 
 ## Usage
 
@@ -103,6 +104,44 @@ plaintext behavior. Raw 32-byte values are also accepted. Keep the key secret;
 changing it requires updating the Home Assistant integration entry as well.
 Runtime key provisioning is not implemented, so the key must be configured on
 both sides before connecting.
+
+## Device-initiated connections
+
+To use ESPHome's `api.outgoing_connection` behavior, configure a real Noise key
+and an optional target IP address:
+
+```python
+from aioesphomeserver import Device, OutgoingConnection
+
+device = Device(
+    name="test-device",
+    mac_address="AC:BC:32:89:0E:C9",
+    encryption_key="<the key configured for this device in Home Assistant>",
+    outgoing_connection=OutgoingConnection(host="192.168.1.10", port=6054, delay=60),
+)
+```
+
+Home Assistant must support device-initiated connections, listen on the selected
+TCP port (default 6054), and already have this device's MAC and encryption key
+registered. This connection does not create a new HA integration entry.
+The device still serves the ordinary inbound API on port 6053; both directions
+share the same entities, protocol handlers, and connection limit.
+
+Omit `host` to learn the IP from the last Noise-verified client declaring itself
+a dial-back target. While any such client is connected, dialing is paused. After
+disconnect, the device waits `delay` seconds and dials that IP at the configured
+port. Failed attempts retry with exponential backoff. Fixed hosts take priority
+over learned addresses. IP literals support IPv4 and IPv6.
+
+Learned addresses last for the `NativeApiServer` instance. For persistence, save
+`NativeApiServer.outgoing_host` in your application and restore it as `host` on
+the next launch. Old configurations leave this feature disabled, and clients
+without the new Hello flag continue to work. New HA target declarations are
+also accepted when this feature is disabled.
+
+See [examples/outgoing_connection.py](examples/outgoing_connection.py) for a
+runnable example, [API.md](API.md#设备主动连接-outgoing_connection) for configuration,
+and [AUDIT_OUTGOING_CONNECTION.md](AUDIT_OUTGOING_CONNECTION.md) for verification.
 
 ## Windows firewall
 

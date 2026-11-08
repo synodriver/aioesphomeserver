@@ -1,5 +1,6 @@
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from aioesphomeapi import APIClient
 from aioesphomeapi.api_pb2 import (
@@ -214,20 +215,23 @@ async def _test_required_alarm_and_lock_codes() -> None:
     assert lock.state == LockState.UNLOCKED
 
 
-def test_hello_rejects_unsupported_outgoing_target() -> None:
-    asyncio.run(_test_hello_rejects_unsupported_outgoing_target())
+def test_hello_ignores_outgoing_target_when_disabled() -> None:
+    asyncio.run(_test_hello_ignores_outgoing_target_when_disabled())
 
 
-async def _test_hello_rejects_unsupported_outgoing_target() -> None:
+async def _test_hello_ignores_outgoing_target_when_disabled() -> None:
     device = Device(name="inbound-only")
     api = NativeApiServer(name="_api")
     device.add_entity(api)
     connection = NativeApiConnection(api, asyncio.StreamReader(), None)  # type: ignore[arg-type]
-    await connection.handle_message(HelloRequest(
-        client_info="outgoing client", outgoing_connection_target=True
-    ))
+    with patch.object(connection, "write_message", new_callable=AsyncMock) as write:
+        await connection.handle_message(HelloRequest(
+            client_info="outgoing client", outgoing_connection_target=True
+        ))
+        write.assert_awaited_once()
     assert connection.client_info == "outgoing client"
-    assert not connection.running
+    assert connection.running
+    assert not connection.outgoing_connection_target
 
 
 def test_log_level_and_dump_config_with_official_client() -> None:
